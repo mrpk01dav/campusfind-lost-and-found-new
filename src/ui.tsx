@@ -26,27 +26,45 @@ import {
   Cloud,
   Loader2,
   Phone,
+  Camera,
+  Edit3,
+  Trash2,
+  Check,
+  Clock,
+  Inbox,
+  Send,
+  Eye,
+  Settings,
+  Bell,
 } from 'lucide-react';
 import {
   categories,
   findMatches,
   getTodayDateString,
   searchItems,
+  dedupeById,
   validItemInput,
   validClaimInput,
   validAuthInput,
   validReportInput,
+  validProfileInput,
   type Item,
   type ItemType,
   type Claim,
   type ClaimStatus,
   type UserProfile,
+  type UserNotificationPreferences,
+  type AppNotification,
+  type NotificationType,
 } from './domain';
 import { isFirebaseConfigured } from './lib/firebase';
 import { authService } from './services/authService';
 import { itemService } from './services/itemService';
 import { claimService } from './services/claimService';
 import { reportService } from './services/reportService';
+import { storageService } from './services/storageService';
+import { notificationService } from './services/notificationService';
+
 
 const icons: Record<string, typeof PackageSearch> = {
   Electronics: Smartphone,
@@ -72,6 +90,10 @@ export default function App() {
   const [menu, setMenu] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  // Dashboard and Requests State
+  const [dashboardTab, setDashboardTab] = useState<'my-reports' | 'my-claims' | 'claims-received'>('my-reports');
+  const [claimsReceived, setClaimsReceived] = useState<Claim[]>([]);
+
   // Auth Modal State
   const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'signin' | 'signup' | 'reset'>('signin');
@@ -84,6 +106,13 @@ export default function App() {
   const [claimTarget, setClaimTarget] = useState<Item | null>(null);
   const [claimDetails, setClaimDetails] = useState('');
   const [claimPhone, setClaimPhone] = useState('');
+  const [claimEvidenceFile, setClaimEvidenceFile] = useState<File | null>(null);
+  const [claimEvidencePreview, setClaimEvidencePreview] = useState<string | null>(null);
+
+  // Reviewer Decision Modal State (For finder requesting more info or rejecting with reason)
+  const [reviewActionClaim, setReviewActionClaim] = useState<Claim | null>(null);
+  const [reviewActionType, setReviewActionType] = useState<'more_info' | 'reject' | null>(null);
+  const [reviewActionNote, setReviewActionNote] = useState('');
 
   // Flag / Abuse Report Modal State
   const [flagTarget, setFlagTarget] = useState<Item | null>(null);
@@ -95,9 +124,50 @@ export default function App() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
+  // Notifications State
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+
+  // Finder-to-Loser Match Notification Modal State
+  const [notifyLoserItem, setNotifyLoserItem] = useState<Item | null>(null);
+  const [notifyFoundItemId, setNotifyFoundItemId] = useState<string>('');
+  const [notifyCustomNote, setNotifyCustomNote] = useState<string>('');
+
+  // Profile Page State
+  const [profileEditing, setProfileEditing] = useState(false);
+  const [profileName, setProfileName] = useState('');
+  const [profilePhone, setProfilePhone] = useState('');
+  const [profileDepartment, setProfileDepartment] = useState('');
+  const [profileContactMethod, setProfileContactMethod] = useState<'email' | 'phone' | 'in_person'>('email');
+  const [profilePrefs, setProfilePrefs] = useState<UserNotificationPreferences>({
+    emailMatches: true,
+    claimUpdates: true,
+    newClaimsReceived: true,
+  });
+  const [profileErrors, setProfileErrors] = useState<Record<string, string>>({});
+  const [avatarUploading, setAvatarUploading] = useState(false);
+
+  // Keep profile inputs in sync when user data loads/changes
+  useEffect(() => {
+    if (user) {
+      setProfileName(user.displayName || '');
+      setProfilePhone(user.phoneNumber || '');
+      setProfileDepartment(user.department || '');
+      setProfileContactMethod(user.preferredContactMethod || 'email');
+      setProfilePrefs({
+        emailMatches: user.notificationPreferences?.emailMatches ?? true,
+        claimUpdates: user.notificationPreferences?.claimUpdates ?? true,
+        newClaimsReceived: user.notificationPreferences?.newClaimsReceived ?? true,
+      });
+    }
+  }, [user]);
+
   // 1. Initial Data and Auth Loading
   useEffect(() => {
     let isMounted = true;
+    let unsubUserClaims: (() => void) | null = null;
+    let unsubClaimsReceived: (() => void) | null = null;
+    let unsubNotifications: (() => void) | null = null;
 
     async function init() {
       setLoading(true);
@@ -106,13 +176,28 @@ export default function App() {
 
       const itemsRes = await itemService.fetchItems();
       if (isMounted) {
-        setItems(itemsRes.items);
+        setItems(dedupeById(itemsRes.items));
         setLoading(false);
       }
 
-      if (currentUser) {
+      if (currentUser && isMounted) {
         const claimsRes = await claimService.fetchClaims(currentUser.id);
-        if (isMounted) setClaims(claimsRes.claims);
+        if (isMounted) setClaims(dedupeById(claimsRes.claims));
+        const receivedRes = await claimService.fetchClaimsReceived(currentUser.id);
+        if (isMounted) setClaimsReceived(dedupeById(receivedRes.claims));
+        const notifsRes = await notificationService.fetchNotifications(currentUser.id);
+        if (isMounted) setNotifications(dedupeById(notifsRes.notifications));
+
+        // Attach realtime subscriptions
+        unsubUserClaims = claimService.subscribeToClaims(currentUser.id, (userClaims) => {
+          if (isMounted) setClaims(dedupeById(userClaims));
+        });
+        unsubClaimsReceived = claimService.subscribeToClaimsReceived(currentUser.id, (received) => {
+          if (isMounted) setClaimsReceived(dedupeById(received));
+        });
+        unsubNotifications = notificationService.subscribeToNotifications(currentUser.id, (notes) => {
+          if (isMounted) setNotifications(dedupeById(notes));
+        });
       }
     }
 
@@ -122,11 +207,31 @@ export default function App() {
     const unsubAuth = authService.onAuthStateChange(async (updatedUser) => {
       if (isMounted) {
         setUser(updatedUser);
+        if (unsubUserClaims) unsubUserClaims();
+        if (unsubClaimsReceived) unsubClaimsReceived();
+        if (unsubNotifications) unsubNotifications();
+
         if (updatedUser) {
           const claimsRes = await claimService.fetchClaims(updatedUser.id);
-          if (isMounted) setClaims(claimsRes.claims);
+          if (isMounted) setClaims(dedupeById(claimsRes.claims));
+          const receivedRes = await claimService.fetchClaimsReceived(updatedUser.id);
+          if (isMounted) setClaimsReceived(dedupeById(receivedRes.claims));
+          const notifsRes = await notificationService.fetchNotifications(updatedUser.id);
+          if (isMounted) setNotifications(dedupeById(notifsRes.notifications));
+
+          unsubUserClaims = claimService.subscribeToClaims(updatedUser.id, (userClaims) => {
+            if (isMounted) setClaims(dedupeById(userClaims));
+          });
+          unsubClaimsReceived = claimService.subscribeToClaimsReceived(updatedUser.id, (received) => {
+            if (isMounted) setClaimsReceived(dedupeById(received));
+          });
+          unsubNotifications = notificationService.subscribeToNotifications(updatedUser.id, (notes) => {
+            if (isMounted) setNotifications(dedupeById(notes));
+          });
         } else {
           setClaims([]);
+          setClaimsReceived([]);
+          setNotifications([]);
         }
       }
     });
@@ -134,7 +239,7 @@ export default function App() {
     // Real-time cross-device synchronization for items
     const unsubItems = itemService.subscribeToItems((liveItems) => {
       if (isMounted) {
-        setItems(liveItems);
+        setItems(dedupeById(liveItems));
         setLoading(false);
       }
     });
@@ -143,8 +248,12 @@ export default function App() {
       isMounted = false;
       unsubAuth();
       unsubItems();
+      if (unsubUserClaims) unsubUserClaims();
+      if (unsubClaimsReceived) unsubClaimsReceived();
+      if (unsubNotifications) unsubNotifications();
     };
   }, []);
+
 
   // 2. Escape Key to Dismiss Modals
   useEffect(() => {
@@ -154,6 +263,8 @@ export default function App() {
         else if (flagTarget) setFlagTarget(null);
         else if (claimTarget) setClaimTarget(null);
         else if (selected) setSelected(null);
+        else if (notifyLoserItem) setNotifyLoserItem(null);
+        else if (notificationsOpen) setNotificationsOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -322,13 +433,34 @@ export default function App() {
       return;
     }
 
-    setItems((prev) => [createdItem, ...prev]);
+    setItems((prev) => dedupeById([createdItem, ...prev]));
     setImageFile(null);
     setImagePreview(null);
     setNotice('Report published successfully and synchronized with cloud database.');
     go('browse');
     setQ(createdItem.title);
     setType('all');
+  }
+
+  // Claim Evidence File Selection Handler
+  function handleClaimEvidenceChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      setNotice('Evidence photo must be under 5MB.');
+      return;
+    }
+
+    setClaimEvidenceFile(file);
+    const reader = new FileReader();
+    reader.onload = () => setClaimEvidencePreview(reader.result as string);
+    reader.readAsDataURL(file);
+  }
+
+  function removeClaimEvidence() {
+    setClaimEvidenceFile(null);
+    setClaimEvidencePreview(null);
   }
 
   // Claim Submission Handler
@@ -352,12 +484,27 @@ export default function App() {
 
     setBusy(true);
 
+    let finalEvidenceUrl: string | undefined = undefined;
+    if (claimEvidenceFile) {
+      const uploadRes = await storageService.uploadFile(
+        claimEvidenceFile,
+        `claims/${claimTarget.id}/${user.id}_${Date.now()}.jpg`,
+      );
+      if (uploadRes.url) {
+        finalEvidenceUrl = uploadRes.url;
+      }
+    }
+
     const { claim: newClaim, error } = await claimService.createClaim(
       claimTarget.id,
       claimDetails,
       user.id,
-      user.displayName,
+      user.displayName || user.email.split('@')[0],
       claimPhone,
+      claimTarget.ownerId,
+      claimTarget.title,
+      user.email,
+      finalEvidenceUrl,
     );
 
     setBusy(false);
@@ -367,12 +514,15 @@ export default function App() {
       return;
     }
 
-    setClaims((prev) => [newClaim, ...prev]);
+    setClaims((prev) => dedupeById([newClaim, ...prev]));
     setClaimDetails('');
     setClaimPhone('');
+    setClaimEvidenceFile(null);
+    setClaimEvidencePreview(null);
     setClaimTarget(null);
     setNotice('Ownership claim submitted securely. Only the finder and reviewers can inspect verification details.');
-    go('claims');
+    setDashboardTab('my-claims');
+    go('dashboard');
   }
 
   async function changeClaim(id: string, s: ClaimStatus) {
@@ -382,6 +532,151 @@ export default function App() {
       setNotice(`Claim status updated to ${s}.`);
     } else {
       setNotice(error);
+    }
+  }
+
+  // Withdraw / Cancel Claim submitted by current user
+  async function handleWithdrawClaim(claimId: string) {
+    if (!user) return;
+    if (!confirm('Are you sure you want to withdraw this ownership claim?')) return;
+
+    setBusy(true);
+    const { error } = await claimService.withdrawClaim(claimId, user.id);
+    setBusy(false);
+
+    if (error) {
+      setNotice(error);
+    } else {
+      setClaims((prev) => prev.filter((c) => c.id !== claimId));
+      setNotice('Ownership claim withdrawn successfully.');
+    }
+  }
+
+  // Reviewer Decision: Approve Claim
+  async function handleApproveClaim(claim: Claim) {
+    if (!user) return;
+    setBusy(true);
+    const { error } = await claimService.approveClaim(
+      claim.id,
+      claim.itemId,
+      user.id,
+      user.displayName || user.email,
+    );
+    setBusy(false);
+
+    if (error) {
+      setNotice(error);
+    } else {
+      setClaimsReceived((prev) =>
+        prev.map((c) => (c.id === claim.id ? { ...c, status: 'Approved' } : c)),
+      );
+      setItems((prev) =>
+        prev.map((i) => (i.id === claim.itemId ? { ...i, status: 'Claim Pending' } : i)),
+      );
+      setNotice('Claim approved! You can now arrange safe handover with the claimant.');
+    }
+  }
+
+  // Reviewer Decision: Confirm Physical Return & Handover Complete
+  async function handleConfirmReturn(claim: Claim) {
+    if (!user) return;
+    if (!confirm('Confirm that the item has been safely returned to the verified owner?')) return;
+
+    setBusy(true);
+    const { error } = await claimService.confirmReturn(claim.id, claim.itemId, user.id);
+    setBusy(false);
+
+    if (error) {
+      setNotice(error);
+    } else {
+      setClaimsReceived((prev) =>
+        prev.map((c) =>
+          c.id === claim.id
+            ? { ...c, status: 'Completed', returnConfirmedBy: user.id }
+            : c,
+        ),
+      );
+      setItems((prev) =>
+        prev.map((i) => (i.id === claim.itemId ? { ...i, status: 'Recovered' } : i)),
+      );
+      setNotice('Item handover confirmed! Item status transitioned to Recovered.');
+    }
+  }
+
+  // Reviewer Decision: Submit Note for More Info or Reject
+  async function submitReviewDecision(e: FormEvent) {
+    e.preventDefault();
+    if (!user || !reviewActionClaim || !reviewActionType) return;
+
+    if (!reviewActionNote.trim()) {
+      setNotice('Please enter a note explaining your request or reason.');
+      return;
+    }
+
+    setBusy(true);
+    if (reviewActionType === 'more_info') {
+      const { error } = await claimService.requestMoreInfo(
+        reviewActionClaim.id,
+        user.id,
+        user.displayName || user.email,
+        reviewActionNote,
+      );
+      setBusy(false);
+      if (error) {
+        setNotice(error);
+      } else {
+        setClaimsReceived((prev) =>
+          prev.map((c) =>
+            c.id === reviewActionClaim.id
+              ? { ...c, status: 'Under Review', resolutionNote: reviewActionNote }
+              : c,
+          ),
+        );
+        setNotice('Additional evidence requested from the claimant.');
+        setReviewActionClaim(null);
+        setReviewActionType(null);
+        setReviewActionNote('');
+      }
+    } else if (reviewActionType === 'reject') {
+      const { error } = await claimService.rejectClaim(
+        reviewActionClaim.id,
+        user.id,
+        user.displayName || user.email,
+        reviewActionNote,
+      );
+      setBusy(false);
+      if (error) {
+        setNotice(error);
+      } else {
+        setClaimsReceived((prev) =>
+          prev.map((c) =>
+            c.id === reviewActionClaim.id
+              ? { ...c, status: 'Rejected', resolutionNote: reviewActionNote }
+              : c,
+          ),
+        );
+        setNotice('Claim has been rejected.');
+        setReviewActionClaim(null);
+        setReviewActionType(null);
+        setReviewActionNote('');
+      }
+    }
+  }
+
+  // Delete own item listing
+  async function handleDeleteItem(itemId: string) {
+    if (!user) return;
+    if (!confirm('Are you sure you want to delete this listing from the database?')) return;
+
+    setBusy(true);
+    const { error } = await itemService.deleteItem(itemId);
+    setBusy(false);
+
+    if (error) {
+      setNotice(error);
+    } else {
+      setItems((prev) => prev.filter((i) => i.id !== itemId));
+      setNotice('Listing removed from campus database.');
     }
   }
 
@@ -395,6 +690,67 @@ export default function App() {
       setNotice(error);
     }
   }
+
+  // Profile Save Handler
+  async function handleSaveProfile(e: FormEvent) {
+    e.preventDefault();
+    if (!user) return;
+
+    const errors = validProfileInput(profileName, profilePhone, profileDepartment);
+    setProfileErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+
+    setBusy(true);
+    const { user: updatedUser, error } = await authService.updateUserProfile(user.id, {
+      displayName: profileName,
+      phoneNumber: profilePhone,
+      department: profileDepartment,
+      preferredContactMethod: profileContactMethod,
+      notificationPreferences: profilePrefs,
+    });
+    setBusy(false);
+
+    if (error) {
+      setNotice(error);
+    } else if (updatedUser) {
+      setUser(updatedUser);
+      setProfileEditing(false);
+      setNotice('Profile updated successfully across your devices!');
+    }
+  }
+
+  // Profile Avatar Upload Handler
+  async function handleAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+
+    const validation = storageService.validateImage(file);
+    if (validation) {
+      setNotice(validation);
+      return;
+    }
+
+    setAvatarUploading(true);
+    const uploadRes = await storageService.uploadProfileAvatar(file, user.id);
+    if (uploadRes.error || !uploadRes.url) {
+      setAvatarUploading(false);
+      setNotice(uploadRes.error || 'Failed to upload avatar photo.');
+      return;
+    }
+
+    const { user: updatedUser, error } = await authService.updateUserProfile(user.id, {
+      avatarUrl: uploadRes.url,
+    });
+    setAvatarUploading(false);
+
+    if (error) {
+      setNotice(error);
+    } else if (updatedUser) {
+      setUser(updatedUser);
+      setNotice('Profile photo updated successfully!');
+    }
+  }
+
 
   // Abuse Report Submission Handler
   async function submitFlagReport(e: FormEvent) {
@@ -436,7 +792,7 @@ export default function App() {
       setNotice(res.error);
     } else {
       const refreshed = await itemService.fetchItems();
-      setItems(refreshed.items);
+      setItems(dedupeById(refreshed.items));
       setNotice(`Seeded ${res.inserted} test records clearly labeled [DEMO / TEST DATA].`);
     }
   }
@@ -449,12 +805,106 @@ export default function App() {
       setNotice(res.error);
     } else {
       const refreshed = await itemService.fetchItems();
-      setItems(refreshed.items);
+      setItems(dedupeById(refreshed.items));
       setNotice('Cleaned up all test records. Real user reports remain untouched.');
     }
   }
 
   const matchesFor = selected ? findMatches(selected, items) : [];
+  const myItems = useMemo(
+    () =>
+      dedupeById(
+        items.filter(
+          (i) =>
+            user &&
+            (i.ownerId === user.id ||
+              i.owner === 'You (this browser)' ||
+              i.owner === user.displayName ||
+              i.ownerName === user.displayName),
+        ),
+      ),
+    [items, user],
+  );
+
+  const myFoundItems = useMemo(
+    () => myItems.filter((i) => i.type === 'found' && i.status !== 'Recovered'),
+    [myItems],
+  );
+
+  const unreadCount = useMemo(
+    () => notifications.filter((n) => !n.read).length,
+    [notifications],
+  );
+
+  async function handleNotificationClick(notif: AppNotification) {
+    if (!notif.read) {
+      await notificationService.markAsRead(notif.id);
+      setNotifications((prev) => prev.map((n) => (n.id === notif.id ? { ...n, read: true } : n)));
+    }
+    setNotificationsOpen(false);
+
+    if (notif.type === 'claim_submitted') {
+      setDashboardTab('claims-received');
+      go('dashboard');
+    } else if (
+      notif.type === 'claim_approved' ||
+      notif.type === 'claim_rejected' ||
+      notif.type === 'evidence_requested' ||
+      notif.type === 'handover_completed'
+    ) {
+      setDashboardTab('my-claims');
+      go('dashboard');
+    } else if (notif.foundItemId) {
+      const targetFound = items.find((i) => i.id === notif.foundItemId);
+      if (targetFound) {
+        setSelected(targetFound);
+      } else {
+        go('browse');
+      }
+    } else if (notif.itemId) {
+      const targetItem = items.find((i) => i.id === notif.itemId);
+      if (targetItem) {
+        setSelected(targetItem);
+      }
+    }
+  }
+
+  async function submitNotifyMatch(e: FormEvent) {
+    e.preventDefault();
+    if (!user || !notifyLoserItem) return;
+
+    if (!notifyLoserItem.ownerId) {
+      setNotice('Cannot send notification: The owner has not linked an account.');
+      return;
+    }
+
+    const matchedFoundItem = myFoundItems.find((i) => i.id === notifyFoundItemId);
+    const foundItemTitle = matchedFoundItem ? matchedFoundItem.title : 'Matching found item';
+    const foundLocation = matchedFoundItem?.location || undefined;
+
+    setBusy(true);
+    const { error } = await notificationService.notifyMatchFound({
+      loserId: notifyLoserItem.ownerId,
+      finderId: user.id,
+      finderName: user.displayName || user.email.split('@')[0],
+      lostItemId: notifyLoserItem.id,
+      lostItemTitle: notifyLoserItem.title,
+      foundItemId: notifyFoundItemId || '',
+      foundItemTitle,
+      foundLocation,
+      customNote: notifyCustomNote,
+    });
+    setBusy(false);
+
+    if (error) {
+      setNotice(error);
+    } else {
+      setNotice(`Notification sent to ${notifyLoserItem.title}'s owner! They will see it in their alerts.`);
+      setNotifyLoserItem(null);
+      setNotifyFoundItemId('');
+      setNotifyCustomNote('');
+    }
+  }
 
   return (
     <div className="app-shell">
@@ -499,7 +949,17 @@ export default function App() {
         <nav className={menu ? 'nav open' : 'nav'}>
           <button onClick={() => go('browse')}>Explore items</button>
           <button onClick={() => go('how')}>How it works</button>
-          <button onClick={() => go('claims')}>
+          {user && (
+            <button onClick={() => go('dashboard')}>
+              Dashboard <span className="nav-count">{myItems.length + claimsReceived.length}</span>
+            </button>
+          )}
+          <button
+            onClick={() => {
+              setDashboardTab('my-claims');
+              go('dashboard');
+            }}
+          >
             My claims <span className="nav-count">{claims.length}</span>
           </button>
           <button
@@ -515,12 +975,118 @@ export default function App() {
           {/* User Authentication Menu */}
           <div className="user-menu">
             {user ? (
-              <div className="user-pill" title={`Signed in as ${user.email}`}>
-                <User size={13} />
-                <span>{user.displayName || user.email.split('@')[0]}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {/* In-app Notifications Bell & Dropdown */}
+                <div className="notification-bell-wrap">
+                  <button
+                    className="notification-bell-btn"
+                    onClick={() => setNotificationsOpen(!notificationsOpen)}
+                    aria-label="View notifications"
+                    title={unreadCount > 0 ? `${unreadCount} unread notifications` : 'Notifications'}
+                  >
+                    <Bell size={15} />
+                    {unreadCount > 0 && <span className="notification-badge">{unreadCount}</span>}
+                  </button>
+                  {notificationsOpen && (
+                    <div className="notification-dropdown">
+                      <div className="notification-header">
+                        <h3><Bell size={14} /> Notifications</h3>
+                        {unreadCount > 0 && (
+                          <button
+                            className="mark-all-read-btn"
+                            onClick={async () => {
+                              await notificationService.markAllAsRead(notifications);
+                              setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+                            }}
+                          >
+                            Mark all read
+                          </button>
+                        )}
+                      </div>
+                      <div className="notification-list">
+                        {notifications.length ? (
+                          notifications.map((n) => {
+                            let iconClass = 'notification-icon-box';
+                            let icon = <Bell size={15} />;
+                            if (n.type === 'match_alert') {
+                              iconClass += ' match';
+                              icon = <HeartHandshake size={15} />;
+                            } else if (n.type === 'claim_approved' || n.type === 'handover_completed') {
+                              iconClass += ' approved';
+                              icon = <CheckCircle2 size={15} />;
+                            } else if (n.type === 'claim_rejected') {
+                              iconClass += ' rejected';
+                              icon = <AlertTriangle size={15} />;
+                            } else if (n.type === 'evidence_requested') {
+                              icon = <Clock size={15} />;
+                            }
+
+                            return (
+                              <button
+                                key={n.id}
+                                className={`notification-item ${n.read ? '' : 'unread'}`}
+                                onClick={() => handleNotificationClick(n)}
+                              >
+                                <div className={iconClass}>{icon}</div>
+                                <div className="notification-content">
+                                  <div className="notification-title">
+                                    <span>{n.title}</span>
+                                    {!n.read && (
+                                      <span
+                                        style={{
+                                          width: 6,
+                                          height: 6,
+                                          borderRadius: '50%',
+                                          background: '#659146',
+                                          display: 'inline-block',
+                                        }}
+                                      />
+                                    )}
+                                  </div>
+                                  <p className="notification-msg">{n.message}</p>
+                                  <span className="notification-time">
+                                    {new Date(n.createdAt).toLocaleDateString()} ·{' '}
+                                    {new Date(n.createdAt).toLocaleTimeString([], {
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })}
+                                  </span>
+                                </div>
+                              </button>
+                            );
+                          })
+                        ) : (
+                          <div className="notification-empty">
+                            <Bell size={24} style={{ color: '#a0af9f' }} />
+                            <span>No notifications yet</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  className="user-pill"
+                  onClick={() => go('profile')}
+                  title={`Signed in as ${user.email} · View Profile`}
+                  style={{ cursor: 'pointer' }}
+                >
+                  {user.avatarUrl ? (
+                    <img
+                      src={user.avatarUrl}
+                      alt=""
+                      style={{ width: 14, height: 14, borderRadius: '50%', objectFit: 'cover' }}
+                    />
+                  ) : (
+                    <User size={13} />
+                  )}
+                  <span>{user.displayName || user.email.split('@')[0]}</span>
+                </button>
                 <button
                   onClick={handleSignOut}
                   aria-label="Sign out"
+                  title="Sign out"
                   style={{ background: 'none', border: 0, padding: 0, display: 'grid', color: '#687e6b' }}
                 >
                   <LogOut size={13} />
@@ -540,6 +1106,7 @@ export default function App() {
           </div>
         </nav>
       </header>
+
 
       {/* Notification Toast */}
       {notice && (
@@ -981,57 +1548,613 @@ export default function App() {
         </main>
       )}
 
-      {/* Claims Page */}
-      {page === 'claims' && (
+      {/* Personal Request Dashboard (My Reports, My Claims, Claims Received) */}
+      {(page === 'dashboard' || page === 'claims') && (
         <main className="page-wrap">
-          <PageIntro
-            eyebrow="RECOVERY DESK"
-            title="Your claims."
-            subtitle="Review ownership claims you have submitted. Verification details remain strictly private."
-          />
-          {claims.length ? (
-            <div className="claims-list">
-              {claims.map((c) => {
-                const relatedItem = items.find((i) => i.id === c.itemId);
-                return (
-                  <article className="claim-card" key={c.id}>
-                    <div>
-                      <span className="status-pill">{c.status}</span>
-                      <h3>{relatedItem?.title || 'Listing'}</h3>
-                      <p>{c.details}</p>
-                      {c.contactPhone && <small style={{ display: 'block', margin: '4px 0' }}>Contact phone: {c.contactPhone}</small>}
-                      <small>Claim created {new Date(c.createdAt).toLocaleDateString()}</small>
-                    </div>
-                    <label>
-                      Claim status
-                      <select value={c.status} onChange={(e) => changeClaim(c.id, e.target.value as ClaimStatus)}>
-                        {(['Pending', 'Under Review', 'Approved', 'Rejected', 'Completed'] as ClaimStatus[]).map((s) => (
-                          <option key={s}>{s}</option>
-                        ))}
-                      </select>
-                    </label>
-                  </article>
-                );
-              })}
+          <div className="dashboard-header">
+            <div>
+              <span className="eyebrow">PERSONAL MANAGEMENT</span>
+              <h1>Request Dashboard</h1>
+              <p>Manage your reported items, track submitted ownership claims, and verify incoming claims from finders.</p>
             </div>
-          ) : (
-            <div className="empty-state">
-              <HeartHandshake size={38} />
-              <h3>No claims yet</h3>
-              <p>Open a found-item report on the board to submit an ownership verification claim.</p>
-              <button
-                className="button primary"
-                onClick={() => {
-                  setType('found');
-                  go('browse');
-                }}
-              >
-                Browse found items <ArrowRight size={16} />
-              </button>
+            <button
+              className="button primary"
+              onClick={() => {
+                setFormType('lost');
+                go('report');
+              }}
+            >
+              <Plus size={16} /> New report
+            </button>
+          </div>
+
+          {/* Responsive Dashboard Tabs */}
+          <div className="dashboard-tabs" style={{ marginBottom: '24px' }}>
+            <button
+              className={`dashboard-tab ${dashboardTab === 'my-reports' ? 'active' : ''}`}
+              onClick={() => setDashboardTab('my-reports')}
+            >
+              <PackageSearch size={15} /> My Reports
+              <span className="tab-badge">{myItems.length}</span>
+            </button>
+            <button
+              className={`dashboard-tab ${dashboardTab === 'my-claims' ? 'active' : ''}`}
+              onClick={() => setDashboardTab('my-claims')}
+            >
+              <Send size={15} /> My Claims
+              <span className="tab-badge">{claims.length}</span>
+            </button>
+            <button
+              className={`dashboard-tab ${dashboardTab === 'claims-received' ? 'active' : ''}`}
+              onClick={() => setDashboardTab('claims-received')}
+            >
+              <Inbox size={15} /> Claims Received
+              <span className="tab-badge">{claimsReceived.length}</span>
+            </button>
+          </div>
+
+          {/* TAB 1: MY REPORTS */}
+          {dashboardTab === 'my-reports' && (
+            <div>
+              {myItems.length ? (
+                <div className="dashboard-list">
+                  {myItems.map((item) => {
+                    const matchesCount = findMatches(item, items).length;
+                    return (
+                      <article className="dashboard-card" key={item.id}>
+                        <div className="dashboard-card-main">
+                          {item.imageUrl || item.image ? (
+                            <img src={item.imageUrl || item.image} alt={item.title} className="dashboard-card-thumb" />
+                          ) : (
+                            <div className="dashboard-card-icon">
+                              <PackageSearch size={28} />
+                            </div>
+                          )}
+                          <div className="dashboard-card-info">
+                            <div className="dashboard-card-meta">
+                              <span className={`type-pill ${item.type}`}>
+                                {item.type === 'lost' ? 'LOST REPORT' : 'FOUND LISTING'}
+                              </span>
+                              <span className="status-pill">{item.status}</span>
+                              {item.isDemo && <span className="demo-tag">DEMO</span>}
+                            </div>
+                            <h3 className="dashboard-card-title">{item.title}</h3>
+                            <p className="dashboard-card-desc">{item.description}</p>
+                            <div className="dashboard-card-facts">
+                              <span>
+                                <MapPin size={13} /> {item.location}
+                              </span>
+                              <span>
+                                <CalendarDays size={13} /> {item.date}
+                              </span>
+                              <span>
+                                <HeartHandshake size={13} />{' '}
+                                <b>{matchesCount}</b> possible {matchesCount === 1 ? 'match' : 'matches'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="dashboard-actions">
+                          <button className="button secondary" onClick={() => setSelected(item)}>
+                            <Eye size={14} /> View & matches
+                          </button>
+                          {item.status !== 'Recovered' && item.status !== 'Closed' && (
+                            <button className="button primary" onClick={() => closeItem(item.id)}>
+                              <Check size={14} /> Mark recovered
+                            </button>
+                          )}
+                          <button
+                            className="button ghost"
+                            onClick={() => handleDeleteItem(item.id)}
+                            style={{ color: '#b5483d' }}
+                          >
+                            <Trash2 size={14} /> Delete
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="empty-state">
+                  <PackageSearch size={38} />
+                  <h3>No reports created yet</h3>
+                  <p>When you lose or find an item on campus, report it here to synchronize with the campus database.</p>
+                  <button
+                    className="button primary"
+                    onClick={() => {
+                      setFormType('lost');
+                      go('report');
+                    }}
+                  >
+                    Report an item <ArrowRight size={16} />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 2: MY CLAIMS */}
+          {dashboardTab === 'my-claims' && (
+            <div>
+              {claims.length ? (
+                <div className="dashboard-list">
+                  {claims.map((c) => {
+                    const relatedItem = items.find((i) => i.id === c.itemId);
+                    return (
+                      <article className="dashboard-card" key={c.id}>
+                        <div className="dashboard-card-main">
+                          <div className="dashboard-card-icon" style={{ background: '#f0f4e9' }}>
+                            <HeartHandshake size={28} />
+                          </div>
+                          <div className="dashboard-card-info">
+                            <div className="dashboard-card-meta">
+                              <span className="status-pill">{c.status}</span>
+                              <span style={{ fontSize: '11px', color: '#889689' }}>
+                                Submitted {new Date(c.createdAt).toLocaleDateString()}
+                              </span>
+                            </div>
+                            <h3 className="dashboard-card-title">{relatedItem?.title || c.itemTitle || 'Item Listing'}</h3>
+                            <p className="dashboard-card-desc">
+                              <b>Your verification claim:</b> {c.details}
+                            </p>
+                            {c.contactPhone && (
+                              <p style={{ fontSize: '11px', color: '#687e6b', margin: '4px 0' }}>
+                                Contact phone: {c.contactPhone}
+                              </p>
+                            )}
+                            {c.evidenceUrl && (
+                              <div style={{ marginTop: '8px' }}>
+                                <a
+                                  href={c.evidenceUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{ fontSize: '11px', color: '#527843', fontWeight: 700 }}
+                                >
+                                  View attached proof photo →
+                                </a>
+                              </div>
+                            )}
+                            {c.resolutionNote && (
+                              <div className="claim-review-box">
+                                <b>Note from finder / reviewer:</b>
+                                <p>{c.resolutionNote}</p>
+                              </div>
+                            )}
+
+                            {/* Unlocked Finder Handover Details upon Claim Approval */}
+                            {c.status === 'Approved' && (
+                              <div className="handover-unlocked-card">
+                                <CheckCircle2 size={16} />
+                                <div>
+                                  <b>Claim Approved! Finder Handover Details:</b>
+                                  <p>
+                                    Finder / Reviewer:{' '}
+                                    <b>{c.reviewerName || relatedItem?.ownerName || relatedItem?.owner || 'Campus Finder'}</b>
+                                  </p>
+                                  {relatedItem?.location && (
+                                    <p>Found location: <b>{relatedItem.location}</b></p>
+                                  )}
+                                  <p className="handover-tip">
+                                    Campus Handover Protocol: For safety and mutual trust, meet at an authorized campus front desk, library desk, or campus security office.
+                                  </p>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="dashboard-actions">
+                          {relatedItem && (
+                            <button className="button secondary" onClick={() => setSelected(relatedItem)}>
+                              <Eye size={14} /> View listing
+                            </button>
+                          )}
+                          {c.status === 'Pending' && (
+                            <button className="button ghost" onClick={() => handleWithdrawClaim(c.id)}>
+                              Withdraw claim
+                            </button>
+                          )}
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="empty-state">
+                  <HeartHandshake size={38} />
+                  <h3>No claims submitted yet</h3>
+                  <p>When you see a found item that belongs to you on the campus board, submit a private claim to verify ownership.</p>
+                  <button
+                    className="button primary"
+                    onClick={() => {
+                      setType('found');
+                      go('browse');
+                    }}
+                  >
+                    Browse found items <ArrowRight size={16} />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 3: CLAIMS RECEIVED (Items you found, claimed by others) */}
+          {dashboardTab === 'claims-received' && (
+            <div>
+              {claimsReceived.length ? (
+                <div className="dashboard-list">
+                  {claimsReceived.map((c) => {
+                    const relatedItem = items.find((i) => i.id === c.itemId);
+                    return (
+                      <article className="dashboard-card" key={c.id}>
+                        <div className="dashboard-card-main">
+                          <div className="dashboard-card-icon" style={{ background: '#e9f1ed', color: '#3b715f' }}>
+                            <Inbox size={28} />
+                          </div>
+                          <div className="dashboard-card-info">
+                            <div className="dashboard-card-meta">
+                              <span className="status-pill">{c.status}</span>
+                              <span style={{ fontSize: '11px', color: '#889689' }}>
+                                Received {new Date(c.createdAt).toLocaleDateString()}
+                              </span>
+                            </div>
+                            <h3 className="dashboard-card-title">
+                              Claim on: “{relatedItem?.title || c.itemTitle || 'Your found listing'}”
+                            </h3>
+                            <p style={{ fontSize: '11px', color: '#44604e', margin: '4px 0 8px' }}>
+                              Claimant: <b>{c.claimantName || c.claimant || 'Campus Member'}</b>
+                              {c.claimantEmail && ` (${c.claimantEmail})`}
+                              {c.contactPhone && ` · Phone: ${c.contactPhone}`}
+                            </p>
+                            <div style={{ background: '#f9faf6', border: '1px solid #e5ecd9', borderRadius: '8px', padding: '10px 12px' }}>
+                              <b style={{ fontSize: '11px', color: '#3f5d47', display: 'block', marginBottom: '4px' }}>
+                                Private Ownership Verification Proof:
+                              </b>
+                              <p style={{ margin: 0, fontSize: '12px', color: '#5f7365', lineHeight: 1.6 }}>
+                                {c.details}
+                              </p>
+                            </div>
+                            {c.evidenceUrl && (
+                              <div style={{ marginTop: '10px' }}>
+                                <img
+                                  src={c.evidenceUrl}
+                                  alt="Claimant Proof"
+                                  style={{ maxHeight: '120px', borderRadius: '8px', border: '1px solid #dce4d5' }}
+                                />
+                              </div>
+                            )}
+                            {c.resolutionNote && (
+                              <div className="claim-review-box">
+                                <b>Your reviewer note:</b>
+                                <p>{c.resolutionNote}</p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Reviewer Action Buttons */}
+                        <div className="dashboard-actions">
+                          {(c.status === 'Pending' || c.status === 'Under Review') && (
+                            <>
+                              <button className="button primary" onClick={() => handleApproveClaim(c)}>
+                                <Check size={14} /> Approve claim
+                              </button>
+                              <button
+                                className="button secondary"
+                                onClick={() => {
+                                  setReviewActionClaim(c);
+                                  setReviewActionType('more_info');
+                                  setReviewActionNote('');
+                                }}
+                              >
+                                Request evidence
+                              </button>
+                              <button
+                                className="button ghost"
+                                onClick={() => {
+                                  setReviewActionClaim(c);
+                                  setReviewActionType('reject');
+                                  setReviewActionNote('');
+                                }}
+                                style={{ color: '#b94b3e' }}
+                              >
+                                Reject claim
+                              </button>
+                            </>
+                          )}
+                          {c.status === 'Approved' && (
+                            <button className="button primary" onClick={() => handleConfirmReturn(c)}>
+                              <CheckCircle2 size={14} /> Confirm return
+                            </button>
+                          )}
+                          {c.status === 'Completed' && (
+                            <span style={{ fontSize: '11px', color: '#567a42', fontWeight: 700, textAlign: 'center' }}>
+                              ✓ Return completed
+                            </span>
+                          )}
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="empty-state">
+                  <Inbox size={38} />
+                  <h3>No claims received yet</h3>
+                  <p>When someone submits an ownership claim for an item you found, their private verification proof will appear here for your review.</p>
+                </div>
+              )}
             </div>
           )}
         </main>
       )}
+
+      {/* Dedicated User Profile Page */}
+      {page === 'profile' && user && (
+        <main className="page-wrap">
+          <PageIntro
+            eyebrow="CAMPUS PROFILE"
+            title="User Profile & Settings"
+            subtitle="Manage your public campus contact preferences, avatar photo, and real-time notification alerts."
+          />
+
+          <div className="profile-layout">
+            {/* Left Column: Sidebar Summary */}
+            <aside className="profile-sidebar">
+              <div className="profile-avatar-wrap">
+                {user.avatarUrl ? (
+                  <img src={user.avatarUrl} alt={user.displayName} className="profile-avatar" />
+                ) : (
+                  <div className="profile-avatar-placeholder">
+                    {user.displayName?.charAt(0).toUpperCase() || 'U'}
+                  </div>
+                )}
+                <label className="avatar-upload-label" title="Upload new photo">
+                  <Camera size={15} />
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={handleAvatarUpload}
+                    disabled={avatarUploading}
+                  />
+                </label>
+              </div>
+
+              {avatarUploading && (
+                <small style={{ color: '#547942', display: 'block', marginBottom: '8px' }}>
+                  Uploading avatar...
+                </small>
+              )}
+
+              <h2 className="profile-name">{user.displayName || 'Campus Member'}</h2>
+              <p className="profile-email">{user.email}</p>
+              <span className={`role-badge ${user.role}`}>{user.role || 'Student'}</span>
+
+              <div className="profile-stats">
+                <div className="profile-stat-box">
+                  <b>{myItems.length}</b>
+                  <small>Reports</small>
+                </div>
+                <div className="profile-stat-box">
+                  <b>{claims.length}</b>
+                  <small>Claims</small>
+                </div>
+              </div>
+
+              <div className="profile-shortcuts">
+                <button
+                  className="profile-shortcut-link"
+                  onClick={() => {
+                    setDashboardTab('my-reports');
+                    go('dashboard');
+                  }}
+                >
+                  <span>My Reports</span>
+                  <ArrowRight size={13} />
+                </button>
+                <button
+                  className="profile-shortcut-link"
+                  onClick={() => {
+                    setDashboardTab('my-claims');
+                    go('dashboard');
+                  }}
+                >
+                  <span>My Claims</span>
+                  <ArrowRight size={13} />
+                </button>
+                <button
+                  className="profile-shortcut-link"
+                  onClick={() => {
+                    setDashboardTab('claims-received');
+                    go('dashboard');
+                  }}
+                >
+                  <span>Claims Received</span>
+                  <ArrowRight size={13} />
+                </button>
+                <button className="profile-shortcut-link" onClick={() => go('browse')}>
+                  <span>Browse Campus Board</span>
+                  <ArrowRight size={13} />
+                </button>
+              </div>
+
+              <div style={{ marginTop: '24px', paddingTop: '16px', borderTop: '1px solid #edf0e7' }}>
+                <button
+                  className="button secondary"
+                  style={{ width: '100%', justifyContent: 'center' }}
+                  onClick={handleSignOut}
+                >
+                  <LogOut size={14} /> Sign out of account
+                </button>
+              </div>
+            </aside>
+
+            {/* Right Column: Editable Profile & Preferences */}
+            <section className="profile-main-card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                <div>
+                  <h2 className="profile-section-title">Personal Information</h2>
+                  <p className="profile-section-sub">
+                    Visible to campus members when coordinating safe handovers.
+                  </p>
+                </div>
+                {!profileEditing && (
+                  <button className="button secondary" onClick={() => setProfileEditing(true)}>
+                    <Edit3 size={14} /> Edit profile
+                  </button>
+                )}
+              </div>
+
+              <form onSubmit={handleSaveProfile}>
+                <div className="profile-form-grid">
+                  <label className="field">
+                    <span>Display name</span>
+                    <input
+                      value={profileName}
+                      onChange={(e) => setProfileName(e.target.value)}
+                      disabled={!profileEditing}
+                      required
+                    />
+                    {profileErrors.displayName && <small className="field-error">{profileErrors.displayName}</small>}
+                  </label>
+
+                  <label className="field">
+                    <span>Phone number (optional)</span>
+                    <input
+                      value={profilePhone}
+                      onChange={(e) => setProfilePhone(e.target.value)}
+                      placeholder="+1 555-0199"
+                      disabled={!profileEditing}
+                    />
+                    {profileErrors.phoneNumber && <small className="field-error">{profileErrors.phoneNumber}</small>}
+                  </label>
+
+                  <label className="field wide">
+                    <span>Department / Campus Office / Major</span>
+                    <input
+                      value={profileDepartment}
+                      onChange={(e) => setProfileDepartment(e.target.value)}
+                      placeholder="e.g. Computer Science / Science Building Rm 302"
+                      disabled={!profileEditing}
+                    />
+                    {profileErrors.department && <small className="field-error">{profileErrors.department}</small>}
+                  </label>
+
+                  <label className="field wide">
+                    <span>Preferred contact method</span>
+                    <select
+                      value={profileContactMethod}
+                      onChange={(e) => setProfileContactMethod(e.target.value as any)}
+                      disabled={!profileEditing}
+                    >
+                      <option value="email">Campus Email ({user.email})</option>
+                      <option value="phone">Phone / WhatsApp</option>
+                      <option value="in_person">In-Person at Campus Desk</option>
+                    </select>
+                  </label>
+                </div>
+
+                {/* Notification Preferences */}
+                <div className="pref-toggles">
+                  <h3 style={{ font: '700 15px Manrope', margin: '0 0 10px', color: '#173d31' }}>
+                    Notification Preferences
+                  </h3>
+                  <label className="pref-toggle-row">
+                    <div className="pref-toggle-info">
+                      <b>Possible matches alert</b>
+                      <small>Email me when items matching my lost reports are found.</small>
+                    </div>
+                    <input
+                      type="checkbox"
+                      className="pref-toggle-input"
+                      checked={profilePrefs.emailMatches ?? true}
+                      disabled={!profileEditing}
+                      onChange={(e) =>
+                        setProfilePrefs((prev) => ({ ...prev, emailMatches: e.target.checked }))
+                      }
+                    />
+                  </label>
+                  <label className="pref-toggle-row">
+                    <div className="pref-toggle-info">
+                      <b>Claim status updates</b>
+                      <small>Notify me when my submitted ownership claim is approved or reviewed.</small>
+                    </div>
+                    <input
+                      type="checkbox"
+                      className="pref-toggle-input"
+                      checked={profilePrefs.claimUpdates ?? true}
+                      disabled={!profileEditing}
+                      onChange={(e) =>
+                        setProfilePrefs((prev) => ({ ...prev, claimUpdates: e.target.checked }))
+                      }
+                    />
+                  </label>
+                  <label className="pref-toggle-row">
+                    <div className="pref-toggle-info">
+                      <b>New claims received</b>
+                      <small>Notify me when someone claims an item I posted on the board.</small>
+                    </div>
+                    <input
+                      type="checkbox"
+                      className="pref-toggle-input"
+                      checked={profilePrefs.newClaimsReceived ?? true}
+                      disabled={!profileEditing}
+                      onChange={(e) =>
+                        setProfilePrefs((prev) => ({ ...prev, newClaimsReceived: e.target.checked }))
+                      }
+                    />
+                  </label>
+                </div>
+
+                {profileEditing && (
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '24px' }}>
+                    <button className="button primary" type="submit" disabled={busy}>
+                      {busy ? 'Saving...' : 'Save changes'}
+                    </button>
+                    <button
+                      className="button secondary"
+                      type="button"
+                      onClick={() => {
+                        setProfileEditing(false);
+                        setProfileName(user.displayName || '');
+                        setProfilePhone(user.phoneNumber || '');
+                        setProfileDepartment(user.department || '');
+                        setProfileContactMethod(user.preferredContactMethod || 'email');
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
+              </form>
+
+              {/* Account Security & Firestore Details */}
+              <div className="account-security-card">
+                <h3 style={{ font: '700 14px Manrope', margin: '0 0 10px', color: '#173d31' }}>
+                  Account Details
+                </h3>
+                <div className="account-meta-item">
+                  <span>Firebase User ID</span>
+                  <b>{user.id}</b>
+                </div>
+                <div className="account-meta-item">
+                  <span>Account Email</span>
+                  <b>{user.email}</b>
+                </div>
+                <div className="account-meta-item">
+                  <span>Campus Role</span>
+                  <b style={{ textTransform: 'capitalize' }}>{user.role}</b>
+                </div>
+                <div className="account-meta-item">
+                  <span>Member Since</span>
+                  <b>{new Date(user.createdAt).toLocaleDateString()}</b>
+                </div>
+              </div>
+            </section>
+          </div>
+        </main>
+      )}
+
 
       {/* How it Works Page */}
       {page === 'how' && (
@@ -1110,6 +2233,9 @@ export default function App() {
             <p className="detail-description">{selected.description}</p>
 
             <div className="detail-facts">
+              <span title="Report ID">
+                <ShieldCheck size={16} /> ID: #{selected.id.slice(0, 8)}
+              </span>
               <span>
                 <PackageSearch size={16} />
                 {selected.category}
@@ -1126,7 +2252,19 @@ export default function App() {
               </span>
               <span>
                 <CalendarDays size={16} />
-                {selected.date}
+                {selected.date} {selected.time ? `· ${selected.time}` : ''}
+              </span>
+              {selected.createdAt && (
+                <span title="Report timestamp">
+                  <Clock size={16} />
+                  Reported {new Date(selected.createdAt).toLocaleDateString()}
+                </span>
+              )}
+              <span title="Poster Verification">
+                <User size={16} />
+                {user && (user.id === selected.ownerId || selected.owner === user.displayName)
+                  ? 'Reported by You'
+                  : `Reported by: ${selected.ownerName || 'Verified Member'}${selected.ownerId ? ` (ID: ${selected.ownerId.slice(0, 6)}...)` : ''}`}
               </span>
             </div>
 
@@ -1163,28 +2301,72 @@ export default function App() {
             </div>
 
             <div className="modal-actions">
+              {/* Action 1: Found item -> Submit Claim */}
               {selected.type === 'found' && selected.status !== 'Recovered' && (
-                <button
-                  className="button primary"
-                  onClick={() => {
-                    if (!user) {
-                      setAuthOpen(true);
-                      setNotice('Please sign in to submit an ownership claim.');
-                    } else {
-                      setClaimTarget(selected);
+                user && user.id === selected.ownerId ? (
+                  <button
+                    className="button secondary"
+                    onClick={() => {
+                      setDashboardTab('claims-received');
+                      go('dashboard');
                       setSelected(null);
-                    }
-                  }}
-                >
-                  Submit ownership claim
-                </button>
+                    }}
+                  >
+                    <Inbox size={15} /> View Claims Received
+                  </button>
+                ) : (
+                  <button
+                    className="button primary"
+                    onClick={() => {
+                      if (!user) {
+                        setAuthOpen(true);
+                        setNotice('Please sign in to submit an ownership claim.');
+                      } else {
+                        setClaimTarget(selected);
+                        setSelected(null);
+                      }
+                    }}
+                  >
+                    This Is My Item — Submit Claim
+                  </button>
+                )
               )}
 
-              {user && (user.id === selected.ownerId || selected.owner === 'You (this browser)' || selected.owner === user.displayName) && selected.status !== 'Recovered' && (
-                <button className="button secondary" onClick={() => closeItem(selected.id)}>
-                  Mark recovered
-                </button>
+              {/* Action 2: Lost item -> Finder notifies Loser */}
+              {selected.type === 'lost' && selected.status !== 'Recovered' && (
+                user && user.id === selected.ownerId ? (
+                  <span style={{ fontSize: '11px', color: '#687e6b' }}>
+                    You reported losing this item. We will alert you when matches are reported.
+                  </span>
+                ) : (
+                  <button
+                    className="button primary"
+                    onClick={() => {
+                      if (!user) {
+                        setAuthOpen(true);
+                        setNotice('Please sign in to notify the owner of a matching item.');
+                      } else {
+                        setNotifyLoserItem(selected);
+                        setNotifyCustomNote('');
+                        setNotifyFoundItemId(myFoundItems[0]?.id || '');
+                        setSelected(null);
+                      }
+                    }}
+                  >
+                    <HeartHandshake size={15} /> I Found a Matching Item — Notify Owner
+                  </button>
+                )
               )}
+
+              {user &&
+                (user.id === selected.ownerId ||
+                  selected.owner === 'You (this browser)' ||
+                  selected.owner === user.displayName) &&
+                selected.status !== 'Recovered' && (
+                  <button className="button secondary" onClick={() => closeItem(selected.id)}>
+                    Mark recovered
+                  </button>
+                )}
 
               <button
                 className="button ghost"
@@ -1196,6 +2378,91 @@ export default function App() {
                 <Flag size={14} /> Flag report
               </button>
             </div>
+          </section>
+        </div>
+      )}
+
+      {/* Finder-to-Loser Match Notification Modal */}
+      {notifyLoserItem && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setNotifyLoserItem(null);
+          }}
+        >
+          <section className="detail-modal" role="dialog" aria-modal="true" aria-labelledby="notify-loser-title">
+            <button className="modal-close" onClick={() => setNotifyLoserItem(null)} aria-label="Close modal">
+              <X />
+            </button>
+            <span className="eyebrow" style={{ color: '#496b42' }}>
+              REUNITE OWNER & FINDER
+            </span>
+            <h2 id="notify-loser-title">Found a match for “{notifyLoserItem.title}”?</h2>
+            <div className="privacy-note">
+              <ShieldCheck size={18} />
+              <p>
+                Notify the person who reported losing this item. They will receive an in-app alert with a link to view your
+                found item report and submit an ownership verification claim.
+              </p>
+            </div>
+            <form onSubmit={submitNotifyMatch}>
+              <div style={{ marginBottom: '16px' }}>
+                <span
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    color: '#465d4e',
+                    display: 'block',
+                    marginBottom: '6px',
+                  }}
+                >
+                  Select which found item you are connecting:
+                </span>
+                {myFoundItems.length > 0 ? (
+                  <select
+                    value={notifyFoundItemId}
+                    onChange={(e) => setNotifyFoundItemId(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '11px',
+                      borderRadius: '8px',
+                      border: '1px solid #dfe6da',
+                      background: '#fff',
+                      fontSize: '12px',
+                    }}
+                  >
+                    <option value="">-- Choose one of your found listings (or leave unselected) --</option>
+                    {myFoundItems.map((fi) => (
+                      <option key={fi.id} value={fi.id}>
+                        {fi.title} ({fi.category} · {fi.location})
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <p style={{ fontSize: '11px', color: '#6e7e72', margin: '4px 0' }}>
+                    Tip: You haven't posted a found report yet. You can still message the owner directly below!
+                  </p>
+                )}
+              </div>
+
+              <label className="field" style={{ marginBottom: '20px' }}>
+                <span>Message or Handover Desk Details for the Owner</span>
+                <textarea
+                  value={notifyCustomNote}
+                  onChange={(e) => setNotifyCustomNote(e.target.value)}
+                  rows={4}
+                  required
+                  placeholder="e.g. I found an item matching your description near the Library 2nd floor, and handed it to campus security desk."
+                  maxLength={1000}
+                />
+              </label>
+
+              <button className="button primary submit-button" type="submit" disabled={busy}>
+                {busy ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />}
+                Send match alert to owner
+              </button>
+            </form>
           </section>
         </div>
       )}
@@ -1244,6 +2511,35 @@ export default function App() {
                   maxLength={1500}
                 />
               </label>
+
+              {/* Optional Photo Proof / Evidence Upload */}
+              <div style={{ marginTop: '14px', marginBottom: '18px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: '#465d4e', display: 'block', marginBottom: '6px' }}>
+                  Supporting photo / receipt / proof of ownership (optional)
+                </span>
+                {claimEvidencePreview ? (
+                  <div className="image-preview-card" style={{ marginTop: '6px' }}>
+                    <img src={claimEvidencePreview} alt="Evidence preview" />
+                    <button type="button" className="image-remove-btn" onClick={removeClaimEvidence} aria-label="Remove photo">
+                      <X size={14} />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="file-upload-box" style={{ marginTop: '6px' }}>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      onChange={handleClaimEvidenceChange}
+                    />
+                    <div className="file-upload-inner">
+                      <Camera size={18} />
+                      <span>Attach proof photo or receipt</span>
+                      <small style={{ color: '#8b978e' }}>JPG, PNG or WebP under 5MB</small>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <button className="button primary submit-button" type="submit" disabled={busy}>
                 {busy ? 'Submitting claim...' : 'Submit verification claim'} <ArrowRight size={16} />
               </button>
@@ -1251,6 +2547,68 @@ export default function App() {
           </section>
         </div>
       )}
+
+      {/* Reviewer Action Note Modal (Request more info / Reject) */}
+      {reviewActionClaim && reviewActionType && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) {
+              setReviewActionClaim(null);
+              setReviewActionType(null);
+            }
+          }}
+        >
+          <section className="detail-modal auth-modal" role="dialog" aria-modal="true">
+            <button
+              className="modal-close"
+              onClick={() => {
+                setReviewActionClaim(null);
+                setReviewActionType(null);
+              }}
+              aria-label="Close dialog"
+            >
+              <X />
+            </button>
+            <span className="eyebrow" style={{ color: reviewActionType === 'more_info' ? '#5a7e48' : '#b8493d' }}>
+              {reviewActionType === 'more_info' ? 'VERIFICATION INQUIRY' : 'CLAIM RESOLUTION'}
+            </span>
+            <h2>
+              {reviewActionType === 'more_info'
+                ? 'Request Additional Evidence'
+                : 'Reject Ownership Claim'}
+            </h2>
+            <p style={{ fontSize: '12px', color: '#6d7c71', margin: '8px 0 16px' }}>
+              Claimant: <b>{reviewActionClaim.claimantName || reviewActionClaim.claimant}</b>
+            </p>
+            <form onSubmit={submitReviewDecision}>
+              <label className="field" style={{ marginBottom: '20px' }}>
+                <span>
+                  {reviewActionType === 'more_info'
+                    ? 'What specific feature or proof do you need them to clarify?'
+                    : 'Reason for rejection (e.g. details did not correspond to found item)'}
+                </span>
+                <textarea
+                  value={reviewActionNote}
+                  onChange={(e) => setReviewActionNote(e.target.value)}
+                  rows={4}
+                  required
+                  placeholder={
+                    reviewActionType === 'more_info'
+                      ? 'e.g. Please describe the stickers on the back or specify what is inside the front pouch...'
+                      : 'e.g. Details provided do not correspond to the found item.'
+                  }
+                />
+              </label>
+              <button className="button primary submit-button" type="submit" disabled={busy}>
+                {busy ? 'Saving...' : reviewActionType === 'more_info' ? 'Send Request' : 'Confirm Rejection'}
+              </button>
+            </form>
+          </section>
+        </div>
+      )}
+
 
       {/* Flag / Abuse Report Modal */}
       {flagTarget && (
@@ -1351,7 +2709,39 @@ export default function App() {
               {authMode === 'reset' && 'Reset your password'}
             </h2>
 
-            {authError && <div className="auth-error">{authError}</div>}
+            {authError && (
+              <div className="auth-error">
+                {authError.includes('Firebase Console') || authError.includes('Sign-in method') || authError.includes('operation-not-allowed') ? (
+                  <div style={{ textAlign: 'left', lineHeight: 1.5 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, marginBottom: '6px', color: '#b94b3e' }}>
+                      <AlertTriangle size={16} />
+                      <span>Firebase Email/Password Setup Required</span>
+                    </div>
+                    <p style={{ margin: '0 0 8px 0', fontSize: '12px' }}>
+                      Email/Password authentication must be enabled in your Firebase Console project (<b>concise-ground-v01dl</b>):
+                    </p>
+                    <ol style={{ margin: '0 0 10px 18px', padding: 0, fontSize: '11px', color: '#444' }}>
+                      <li>Open Firebase Console &gt; <b>Authentication</b> &gt; <b>Sign-in method</b> tab</li>
+                      <li>Click <b>Email/Password</b></li>
+                      <li>Toggle <b>Enable</b> to ON and click <b>Save</b></li>
+                    </ol>
+                    <div style={{ marginTop: '10px' }}>
+                      <button
+                        type="button"
+                        className="button primary compact"
+                        onClick={handleGoogleSignIn}
+                        disabled={busy}
+                        style={{ fontSize: '12px', padding: '6px 12px', width: '100%', justifyContent: 'center' }}
+                      >
+                        Use Google Sign-In Right Now (No Setup Needed)
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  authError
+                )}
+              </div>
+            )}
 
             <button
               type="button"

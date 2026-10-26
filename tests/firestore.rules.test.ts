@@ -39,4 +39,10 @@ describe('Firestore Security Rules Hardening Audit', () => {
     expect(rules).toContain("incoming().role in ['student', 'staff']");
     expect(rules).toContain('incoming().role == existing().role');
   });
+
+  it('secures notifications collection and restricts access to recipient', () => {
+    expect(rules).toContain('match /notifications/{notificationId}');
+    expect(rules).toContain('resource.data.recipientId == request.auth.uid');
+    expect(rules).toContain('function isValidNotification(data)');
+  });
 });

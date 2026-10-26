@@ -236,6 +236,76 @@
         }
       },
       "required": ["id", "email", "displayName", "role", "createdAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "In-app notifications for matching items, claim updates, and return confirmations",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the notification"
+        },
+        "recipientId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Firebase UID of recipient"
+        },
+        "senderId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Firebase UID of sender"
+        },
+        "senderName": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Display name of sender"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["match_alert", "claim_submitted", "claim_approved", "claim_rejected", "evidence_requested", "handover_completed"],
+          "description": "Type of notification"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Notification title"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Notification message text"
+        },
+        "itemId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Target item ID"
+        },
+        "itemTitle": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Target item title"
+        },
+        "foundItemId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Matching found item ID if applicable"
+        },
+        "claimId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Associated claim ID if applicable"
+        },
+        "read": {
+          "type": "boolean",
+          "description": "Whether the notification has been read"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Timestamp of notification creation"
+        }
+      },
+      "required": ["recipientId", "senderId", "type", "title", "message", "itemId", "read", "createdAt"]
     }
   },
   "firestore": {
@@ -262,6 +332,12 @@
         "$ref": "#/entities/UserProfile"
       },
       "description": "User profiles"
+    },
+    "/notifications/{notificationId}": {
+      "schema": {
+        "$ref": "#/entities/Notification"
+      },
+      "description": "In-app notifications and match alerts"
     }
   }
 }

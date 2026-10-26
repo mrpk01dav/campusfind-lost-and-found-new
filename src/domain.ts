@@ -4,13 +4,24 @@ export type ClaimStatus = 'Pending' | 'Under Review' | 'Approved' | 'Rejected' |
 export type ModerationStatus = 'pending' | 'approved' | 'flagged' | 'rejected' | 'removed';
 export type UserRole = 'student' | 'staff' | 'moderator' | 'admin';
 
+export interface UserNotificationPreferences {
+  emailMatches?: boolean;
+  claimUpdates?: boolean;
+  newClaimsReceived?: boolean;
+}
+
 export interface UserProfile {
   id: string;
   email: string;
   displayName: string;
   avatarUrl?: string;
+  phoneNumber?: string;
+  department?: string;
+  preferredContactMethod?: 'email' | 'phone' | 'in_person';
+  notificationPreferences?: UserNotificationPreferences;
   role: UserRole;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface Item {
@@ -40,14 +51,21 @@ export interface Item {
 export interface Claim {
   id: string;
   itemId: string;
+  itemTitle?: string;
+  itemOwnerId?: string; // UID of user who posted the item
   claimant: string;
   claimantId?: string;
   claimantName?: string;
+  claimantEmail?: string;
   contactPhone?: string;
   details: string;
+  evidenceUrl?: string;
   status: ClaimStatus;
   reviewerId?: string;
+  reviewerName?: string;
   resolutionNote?: string;
+  returnConfirmedAt?: string;
+  returnConfirmedBy?: string;
   createdAt: string;
   updatedAt?: string;
 }
@@ -60,6 +78,30 @@ export interface AbuseReport {
   reason: string;
   details?: string;
   status: 'pending' | 'reviewed' | 'dismissed' | 'action_taken';
+  createdAt: string;
+}
+
+export type NotificationType =
+  | 'match_alert'
+  | 'claim_submitted'
+  | 'claim_approved'
+  | 'claim_rejected'
+  | 'evidence_requested'
+  | 'handover_completed';
+
+export interface AppNotification {
+  id: string;
+  recipientId: string;
+  senderId: string;
+  senderName: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  itemId: string;
+  itemTitle: string;
+  foundItemId?: string;
+  claimId?: string;
+  read: boolean;
   createdAt: string;
 }
 
@@ -234,8 +276,21 @@ export function scoreMatch(lost: Item, found: Item) {
   };
 }
 
+export function dedupeById<T extends { id: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  for (const item of items) {
+    if (item && item.id && !seen.has(item.id)) {
+      seen.add(item.id);
+      result.push(item);
+    }
+  }
+  return result;
+}
+
 export function findMatches(item: Item, all: Item[]) {
-  const other = all.filter(
+  const deduped = dedupeById(all);
+  const other = deduped.filter(
     (x) =>
       x.id !== item.id &&
       x.type !== item.type &&
@@ -254,8 +309,9 @@ export function findMatches(item: Item, all: Item[]) {
 }
 
 export function searchItems(items: Item[], q: string, type: string, category: string, status: string) {
+  const deduped = dedupeById(items);
   const query = q.trim().toLowerCase();
-  return items
+  return deduped
     .filter(
       (i) =>
         i.moderationStatus !== 'removed' &&
@@ -353,3 +409,26 @@ export function validReportInput(reason: string, details?: string) {
   }
   return errors;
 }
+
+export function validProfileInput(displayName: string, phoneNumber?: string, department?: string) {
+  const errors: Record<string, string> = {};
+  const trimmedName = displayName?.trim() || '';
+  if (!trimmedName) {
+    errors.displayName = 'Display name is required.';
+  } else if (trimmedName.length < 2) {
+    errors.displayName = 'Name must be at least 2 characters.';
+  } else if (trimmedName.length > 60) {
+    errors.displayName = 'Name cannot exceed 60 characters.';
+  }
+
+  if (phoneNumber && phoneNumber.trim().length > 30) {
+    errors.phoneNumber = 'Phone number cannot exceed 30 characters.';
+  }
+
+  if (department && department.trim().length > 100) {
+    errors.department = 'Department / campus location cannot exceed 100 characters.';
+  }
+
+  return errors;
+}
+

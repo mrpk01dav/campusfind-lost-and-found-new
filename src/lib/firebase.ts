@@ -1,6 +1,7 @@
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
@@ -10,6 +11,12 @@ export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
 // Initialize Firebase Authentication
 export const auth = getAuth(app);
+
+// Initialize Firebase Cloud Storage
+export const storage = getStorage(
+  app,
+  firebaseConfig.storageBucket ? `gs://${firebaseConfig.storageBucket}` : undefined,
+);
 
 export const isFirebaseConfigured = Boolean(firebaseConfig && firebaseConfig.projectId);
 
@@ -67,8 +74,12 @@ export async function testConnection(): Promise<boolean> {
     await getDocFromServer(doc(db, 'test', 'connection'));
     return true;
   } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration or network status.');
+    if (error instanceof Error) {
+      if (error.message.includes('the client is offline')) {
+        console.warn('Firebase connection: Client is currently offline or connecting to Cloud Firestore.');
+      } else if (error.message.includes('token-service-api-has-not-been-used')) {
+        console.warn('Firebase Auth Token Service initializing. If sign-in persists in offline mode, ensure securetoken.googleapis.com is enabled in Google Cloud Console.');
+      }
     }
     return false;
   }
@@ -76,5 +87,5 @@ export async function testConnection(): Promise<boolean> {
 
 // Boot connection check
 testConnection().catch((err) => {
-  console.warn('Firebase test connection completed:', err);
+  console.warn('Firebase test connection status:', err);
 });

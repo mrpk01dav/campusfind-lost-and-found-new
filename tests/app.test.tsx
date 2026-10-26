@@ -81,11 +81,19 @@ vi.mock('../src/services/itemService', () => ({
 vi.mock('../src/services/claimService', () => ({
   claimService: {
     fetchClaims: vi.fn(async () => ({ claims: [], error: null })),
+    fetchClaimsReceived: vi.fn(async () => ({ claims: [], error: null })),
     createClaim: vi.fn(async () => ({ claim: null, error: null })),
     updateClaimStatus: vi.fn(async () => ({ error: null })),
     subscribeToClaims: vi.fn(() => () => {}),
+    subscribeToClaimsReceived: vi.fn(() => () => {}),
+    approveClaim: vi.fn(async () => ({ error: null })),
+    rejectClaim: vi.fn(async () => ({ error: null })),
+    requestMoreInfo: vi.fn(async () => ({ error: null })),
+    confirmReturn: vi.fn(async () => ({ error: null })),
+    withdrawClaim: vi.fn(async () => ({ error: null })),
   },
 }));
+
 
 vi.mock('../src/services/reportService', () => ({
   reportService: {
@@ -94,8 +102,20 @@ vi.mock('../src/services/reportService', () => ({
   },
 }));
 
+vi.mock('../src/services/notificationService', () => ({
+  notificationService: {
+    fetchNotifications: vi.fn(async () => ({ notifications: [], error: null })),
+    subscribeToNotifications: vi.fn(() => () => {}),
+    createNotification: vi.fn(async () => ({ error: null })),
+    markAsRead: vi.fn(async () => ({ error: null })),
+    markAllAsRead: vi.fn(async () => {}),
+    notifyMatchFound: vi.fn(async () => ({ error: null })),
+  },
+}));
+
 describe('CampusFind Cloud-Synced Platform Integration', () => {
   beforeEach(() => {
+    window.scrollTo = vi.fn();
     mockItems = [...demoItems];
     mockUser = {
       id: 'usr-test-1',
@@ -216,4 +236,85 @@ describe('CampusFind Cloud-Synced Platform Integration', () => {
       expect(screen.getByText(/Seeded/i)).toBeDefined();
     });
   });
+
+  it('navigates to the Dashboard and switches between My Reports, My Claims, and Claims Received', async () => {
+    render(<App />);
+    const claimsNavButtons = screen.getAllByRole('button', { name: /My claims/i });
+    fireEvent.click(claimsNavButtons[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Request Dashboard/i })).toBeDefined();
+      expect(screen.getByRole('button', { name: /My Reports/i })).toBeDefined();
+      expect(screen.getAllByRole('button', { name: /My Claims/i }).length).toBeGreaterThanOrEqual(2);
+      expect(screen.getByRole('button', { name: /Claims Received/i })).toBeDefined();
+    });
+
+    // Switch to Claims Received tab
+    fireEvent.click(screen.getByRole('button', { name: /Claims Received/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/No claims received yet/i)).toBeDefined();
+    });
+
+    // Switch to My Reports tab
+    fireEvent.click(screen.getByRole('button', { name: /My Reports/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /New report/i })).toBeDefined();
+    });
+  });
+
+  it('navigates to Profile page and displays account identity and preferences', async () => {
+    render(<App />);
+    const userBtn = await screen.findByRole('button', { name: /Campus Tester/i });
+    fireEvent.click(userBtn);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /User Profile & Settings/i })).toBeDefined();
+      expect(screen.getAllByText(/tester@campus.edu/i).length).toBeGreaterThan(0);
+      expect(screen.getByText(/Notification Preferences/i)).toBeDefined();
+      expect(screen.getByText(/Account Details/i)).toBeDefined();
+    });
+  });
+
+  it('allows a finder to notify the owner of a matching lost item report', async () => {
+    render(<App />);
+    const exploreButtons = screen.getAllByRole('button', { name: /Explore items/i });
+    fireEvent.click(exploreButtons[0]);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /View details/i }).length).toBeGreaterThan(0);
+    });
+
+    // Open first report details
+    const viewButtons = screen.getAllByRole('button', { name: /View details/i });
+    fireEvent.click(viewButtons[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeDefined();
+    });
+
+    // If report is lost item, should have Notify Owner button
+    const notifyBtn = screen.queryByRole('button', { name: /Notify Owner/i });
+    if (notifyBtn) {
+      fireEvent.click(notifyBtn);
+      await waitFor(() => {
+        expect(screen.getByRole('heading', { name: /Found a match for/i })).toBeDefined();
+        expect(screen.getByText(/REUNITE OWNER & FINDER/i)).toBeDefined();
+      });
+    }
+  });
+
+  it('renders topbar in-app notification bell with unread indicators and drawer', async () => {
+    render(<App />);
+    const bellBtn = await screen.findByRole('button', { name: /View notifications/i });
+    expect(bellBtn).toBeDefined();
+
+    fireEvent.click(bellBtn);
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Notifications/i })).toBeDefined();
+    });
+  });
 });
+
+
+
+

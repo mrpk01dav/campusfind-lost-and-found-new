@@ -14,6 +14,7 @@ import {
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { demoItems, type Item, type ItemType, type ItemStatus } from '../domain';
+import { storageService } from './storageService';
 
 function docToItem(d: QueryDocumentSnapshot<DocumentData> | { id: string; data: () => DocumentData }): Item {
   const data = d.data();
@@ -59,58 +60,14 @@ export const itemService = {
   },
 
   /**
-   * Encodes and optimizes image for cross-device cloud persistence
+   * Uploads image using Firebase Cloud Storage with optimized data URI fallback
    */
-  async uploadItemImage(file: File): Promise<{ url: string | null; error: string | null }> {
-    return new Promise((resolve) => {
-      if (file.size > 5 * 1024 * 1024) {
-        return resolve({ url: null, error: 'Image exceeds 5MB limit. Please choose a smaller file.' });
-      }
-
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const img = new Image();
-        img.onload = () => {
-          // Scale down image to ensure it fits comfortably within Firestore document limit (<500KB)
-          const MAX_WIDTH = 1200;
-          const MAX_HEIGHT = 1200;
-          let width = img.width;
-          let height = img.height;
-
-          if (width > height) {
-            if (width > MAX_WIDTH) {
-              height = Math.round((height * MAX_WIDTH) / width);
-              width = MAX_WIDTH;
-            }
-          } else {
-            if (height > MAX_HEIGHT) {
-              width = Math.round((width * MAX_HEIGHT) / height);
-              height = MAX_HEIGHT;
-            }
-          }
-
-          const canvas = document.createElement('canvas');
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          if (!ctx) {
-            return resolve({ url: e.target?.result as string, error: null });
-          }
-
-          ctx.drawImage(img, 0, 0, width, height);
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
-          resolve({ url: dataUrl, error: null });
-        };
-        img.onerror = () => {
-          resolve({ url: null, error: 'Failed to process selected image.' });
-        };
-        img.src = e.target?.result as string;
-      };
-      reader.onerror = () => {
-        resolve({ url: null, error: 'Failed to read image file.' });
-      };
-      reader.readAsDataURL(file);
-    });
+  async uploadItemImage(
+    file: File,
+    userId?: string,
+    onProgress?: (pct: number) => void,
+  ): Promise<{ url: string | null; error: string | null }> {
+    return storageService.uploadItemPhoto(file, userId || 'campus-user', onProgress);
   },
 
   async createItem(
@@ -118,12 +75,13 @@ export const itemService = {
     imageFile: File | null,
     userId: string,
     userName: string,
+    onProgress?: (pct: number) => void,
   ): Promise<{ item: Item | null; error: string | null }> {
     try {
       let finalImageUrl = draft.imageUrl || draft.image || null;
 
       if (imageFile) {
-        const uploadResult = await this.uploadItemImage(imageFile);
+        const uploadResult = await this.uploadItemImage(imageFile, userId, onProgress);
         if (uploadResult.error) {
           return { item: null, error: uploadResult.error };
         }
@@ -185,6 +143,35 @@ export const itemService = {
     } catch (err: any) {
       console.error('Error creating item in Firestore:', err);
       handleFirestoreError(err, OperationType.CREATE, 'items');
+    }
+  },
+
+  async updateItem(
+    itemId: string,
+    updates: Partial<Item>,
+  ): Promise<{ error: string | null }> {
+    try {
+      const itemRef = doc(db, 'items', itemId);
+      const payload: Record<string, any> = {
+        updatedAt: serverTimestamp(),
+      };
+
+      if (updates.title !== undefined) payload.title = updates.title.trim();
+      if (updates.category !== undefined) payload.category = updates.category;
+      if (updates.description !== undefined) payload.description = updates.description.trim();
+      if (updates.color !== undefined) payload.color = updates.color.trim();
+      if (updates.location !== undefined) payload.location = updates.location.trim();
+      if (updates.date !== undefined) payload.date = updates.date;
+      if (updates.time !== undefined) payload.time = updates.time.trim();
+      if (updates.imageUrl !== undefined) payload.imageUrl = updates.imageUrl;
+      if (updates.handover !== undefined) payload.handover = Boolean(updates.handover);
+      if (updates.status !== undefined) payload.status = updates.status;
+
+      await updateDoc(itemRef, payload);
+      return { error: null };
+    } catch (err: any) {
+      console.error('Error updating item:', err);
+      handleFirestoreError(err, OperationType.UPDATE, `items/${itemId}`);
     }
   },
 

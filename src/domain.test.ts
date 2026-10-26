@@ -1,5 +1,5 @@
-import {describe,it,expect} from 'vitest';
-import {demoItems,findMatches,scoreMatch,searchItems,validItemInput,type Item} from './domain';
+import { describe, it, expect } from 'vitest';
+import { demoItems, findMatches, scoreMatch, searchItems, validItemInput, dedupeById, type Item } from './domain';
 const lost:Item={id:'l',type:'lost',title:'Blue notebook',category:'Books & Notes',description:'Blue ruled notebook near study tables',color:'Blue',location:'Central Library',date:'2026-10-22',status:'Open',owner:'test',handover:false,createdAt:'2026-10-22T00:00:00Z'};
 const found:Item={...lost,id:'f',type:'found',title:'Notebook found',description:'Ruled blue notebook found by study tables',createdAt:'2026-10-22T01:00:00Z'};
 describe('CampusFind domain logic',()=>{
@@ -11,4 +11,10 @@ describe('CampusFind domain logic',()=>{
  it('filters by type/category/status',()=>{expect(searchItems(demoItems,'','lost','all','all').every(i=>i.type==='lost')).toBe(true);expect(searchItems(demoItems,'','all','Keys','all').every(i=>i.category==='Keys')).toBe(true)});
  it('validates required fields and rejects future dates',()=>{expect(Object.keys(validItemInput({})).length).toBeGreaterThan(0);expect(validItemInput({...lost,date:'2999-01-01'}).date).toBe('Date cannot be in the future.')});
  it('accepts a valid report draft',()=>{expect(validItemInput(lost)).toEqual({})});
+ it('deduplicates entities with identical IDs to prevent duplicate keys in lists',()=>{
+   const duplicateList = [lost, { ...lost }, found, { ...found }];
+   const result = dedupeById(duplicateList);
+   expect(result).toHaveLength(2);
+   expect(result.map(x => x.id)).toEqual(['l', 'f']);
+ });
 });
