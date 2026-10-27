@@ -149,4 +149,72 @@
 .match-finder-banner b{font-size:12px;color:#2b4834;display:block}
 .match-finder-banner span{font-size:11px;color:#5a6e5f}
 
+/* Rewards & Honesty Recognition Styles */
+.rewards-header-card{background:linear-gradient(135deg,#173d31 0%,#245743 100%);color:#fff;border-radius:18px;padding:28px 32px;display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;flex-wrap:wrap;gap:20px;box-shadow:0 12px 35px rgba(23,61,49,0.15)}
+.rewards-header-copy h2{font:800 28px Manrope;margin:4px 0 8px;color:#fff;letter-spacing:-.6px}
+.rewards-header-copy p{font-size:13px;color:#d3e3da;margin:0;max-width:520px;line-height:1.6}
+.rewards-points-pill{background:rgba(216,242,125,0.18);border:1px solid rgba(216,242,125,0.35);border-radius:14px;padding:16px 24px;text-align:center;min-width:160px}
+.rewards-points-pill b{display:block;font:800 36px Manrope;color:#d8f27d;line-height:1}
+.rewards-points-pill small{font-size:11px;color:#e8f4d9;font-weight:700;letter-spacing:.8px;text-transform:uppercase;margin-top:6px;display:block}
+
+.eligibility-rules-banner{background:#f5f7ee;border:1px solid #dbe3cc;border-radius:12px;padding:16px 20px;margin-bottom:28px;display:flex;align-items:flex-start;gap:14px;color:#45604c}
+.eligibility-rules-banner svg{color:#6c8c4d;flex:none;margin-top:2px}
+.eligibility-rules-banner b{color:#1e3c2c;display:block;margin-bottom:3px;font-size:13px}
+.eligibility-rules-banner p{font-size:12px;color:#5c7061;margin:0;line-height:1.6}
+
+.badges-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:32px}
+.badge-card{background:#fffefa;border:1px solid var(--line);border-radius:14px;padding:20px;text-align:center;position:relative;transition:transform .2s,box-shadow .2s;display:flex;flex-direction:column;align-items:center}
+.badge-card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,0.05)}
+.badge-card.locked{opacity:.65;background:#fcfdfa;border-style:dashed}
+.badge-icon{font-size:36px;margin-bottom:12px;display:inline-block}
+.badge-card h4{font:700 15px Manrope;color:var(--deep);margin:0 0 6px}
+.badge-card p{font-size:11px;color:#78867c;line-height:1.5;margin:0 0 14px;flex:1}
+.badge-status{font-size:10px;font-weight:800;letter-spacing:.5px;padding:4px 10px;border-radius:20px;text-transform:uppercase}
+.badge-status.unlocked{background:#e2eed7;color:#3f6b31}
+.badge-status.locked{background:#ecefe8;color:#828e83}
+.badge-cert-btn{margin-top:12px;width:100%;font-size:11px;padding:8px 10px;display:flex;align-items:center;justify-content:center;gap:6px}
+
+.rewards-ledger-wrap{background:#fffefa;border:1px solid var(--line);border-radius:14px;padding:24px;overflow-x:auto}
+.rewards-ledger-table{width:100%;border-collapse:collapse;font-size:12px;text-align:left}
+.rewards-ledger-table th{background:#f8faf4;padding:12px 14px;border-bottom:1px solid var(--line);color:#5d7264;font-weight:700;font-size:11px;letter-spacing:.5px}
+.rewards-ledger-table td{padding:14px;border-bottom:1px solid #f2f5ec;color:#495f50}
+.rewards-ledger-table tr:last-child td{border-bottom:none}
+.points-positive{color:#3f7734;font-weight:800;font-size:13px}
+
+/* Certificate of Appreciation Modal */
+.certificate-modal{width:min(680px,100%);background:#fff;border-radius:16px;padding:40px;box-shadow:0 30px 90px rgba(0,0,0,0.3);position:relative;border:8px solid #f2f5ed}
+.certificate-frame{border:2px solid #b8cbab;padding:32px 28px;text-align:center;background:#fdfefb;position:relative}
+.certificate-seal{width:64px;height:64px;border-radius:50%;background:#173d31;color:#d8f27d;display:grid;place-items:center;margin:0 auto 16px;font-size:28px;box-shadow:0 4px 14px rgba(23,61,49,0.25)}
+.certificate-institution{font:800 11px Manrope;letter-spacing:2px;color:#5a7b45;text-transform:uppercase;margin-bottom:6px}
+.certificate-title{font:800 28px/1.15 Georgia,serif;color:#102c24;margin:0 0 16px}
+.certificate-subtitle{font-size:13px;color:#6b7c71;font-style:italic;margin-bottom:14px}
+.certificate-recipient{font:800 26px Manrope;color:#173d31;text-decoration:underline;text-decoration-color:#99b986;text-underline-offset:6px;margin:8px 0 16px}
+.certificate-reason{font-size:13px;color:#526458;line-height:1.7;max-width:480px;margin:0 auto 20px}
+.certificate-meta-row{display:flex;justify-content:space-between;align-items:flex-end;border-top:1px solid #dbe3cc;padding-top:20px;margin-top:28px;font-size:11px;color:#68776b}
+.certificate-sig-line{border-top:1px solid #4a6350;width:140px;margin:0 auto 4px;padding-top:4px;font-weight:700;color:#1e3c2c}
+
+/* Safeguard Notice Callouts */
+.safeguard-banner{background:#fff8e6;border:1px solid #f6deb3;border-radius:10px;padding:12px 14px;margin-bottom:14px;display:flex;align-items:flex-start;gap:10px;color:#875811;font-size:11px}
+.safeguard-banner svg{flex:none;margin-top:2px}
+
+@media(max-width:850px){
+  .badges-grid{grid-template-columns:repeat(2,1fr)}
+  .rewards-header-card{padding:22px;flex-direction:column;align-items:flex-start}
+  .rewards-points-pill{width:100%}
+}
+@media(max-width:550px){
+  .badges-grid{grid-template-columns:1fr}
+  .certificate-modal{padding:20px;border-width:4px}
+  .certificate-frame{padding:20px 14px}
+  .certificate-title{font-size:22px}
+  .certificate-recipient{font-size:20px}
+}
+@media print{
+  body *{visibility:hidden}
+  .certificate-modal,.certificate-modal *{visibility:visible}
+  .certificate-modal{position:absolute;left:0;top:0;width:100%;box-shadow:none;border:none;padding:0}
+  .modal-actions,.modal-close{display:none!important}
+}
+
+
 

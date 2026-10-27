@@ -19,9 +19,92 @@ export interface UserProfile {
   department?: string;
   preferredContactMethod?: 'email' | 'phone' | 'in_person';
   notificationPreferences?: UserNotificationPreferences;
+  rewardsOptIn?: boolean;
   role: UserRole;
   createdAt: string;
   updatedAt?: string;
+}
+
+export type RewardActionType = 'item_returned' | 'found_item_verified' | 'match_assisted';
+
+export interface RewardTransaction {
+  id: string;
+  userId: string;
+  action: RewardActionType;
+  points: number;
+  targetId: string;
+  targetTitle?: string;
+  description: string;
+  createdAt: string;
+}
+
+export const REWARD_POINTS: Record<RewardActionType, number> = {
+  item_returned: 50,
+  found_item_verified: 25,
+  match_assisted: 15,
+};
+
+export interface AchievementBadge {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  minPoints: number;
+  unlocked: boolean;
+}
+
+export function calculateUserRewards(transactions: RewardTransaction[]) {
+  const totalPoints = transactions.reduce((sum, t) => sum + (t.points || 0), 0);
+  const badges: AchievementBadge[] = [
+    {
+      id: 'first_reunion',
+      name: 'First Reunion',
+      description: 'Assisted in reconnecting a lost item on campus.',
+      icon: '🤝',
+      minPoints: 15,
+      unlocked: totalPoints >= 15,
+    },
+    {
+      id: 'honest_finder',
+      name: 'Honest Finder',
+      description: 'Confirmed safe return and handover of a found item.',
+      icon: '🌟',
+      minPoints: 50,
+      unlocked: totalPoints >= 50,
+    },
+    {
+      id: 'campus_guardian',
+      name: 'Campus Guardian',
+      description: 'Earned 100+ community points through active campus honesty.',
+      icon: '🛡️',
+      minPoints: 100,
+      unlocked: totalPoints >= 100,
+    },
+    {
+      id: 'community_hero',
+      name: 'Community Hero',
+      description: 'Distinguished honor for 250+ points in campus return efforts.',
+      icon: '🏆',
+      minPoints: 250,
+      unlocked: totalPoints >= 250,
+    },
+  ];
+  return { totalPoints, badges };
+}
+
+export function canEditReport(item: Item, currentUserId?: string): boolean {
+  if (!currentUserId || (item.ownerId !== currentUserId && item.owner !== currentUserId)) return false;
+  return item.status === 'Open' || item.status === 'Possible Match';
+}
+
+export function canCancelReport(item: Item, currentUserId?: string): boolean {
+  if (!currentUserId || (item.ownerId !== currentUserId && item.owner !== currentUserId)) return false;
+  return item.status === 'Open' || item.status === 'Possible Match';
+}
+
+export function canWithdrawClaim(claim: Claim, currentUserId?: string): boolean {
+  if (!currentUserId || (claim.claimantId !== currentUserId && claim.claimant !== currentUserId)) return false;
+  return claim.status === 'Pending' || claim.status === 'Under Review';
 }
 
 export interface Item {

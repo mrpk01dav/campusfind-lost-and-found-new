@@ -27,6 +27,7 @@ function docDataToProfile(u: FirebaseUser, data?: Record<string, any>): UserProf
       claimUpdates: data?.notificationPreferences?.claimUpdates ?? true,
       newClaimsReceived: data?.notificationPreferences?.newClaimsReceived ?? true,
     },
+    rewardsOptIn: data?.rewardsOptIn ?? true,
     role: (data?.role as UserRole) || 'student',
     createdAt: data?.createdAt?.toDate
       ? data.createdAt.toDate().toISOString()
@@ -89,6 +90,9 @@ export const authService = {
       }
       if (updates.notificationPreferences !== undefined) {
         firestorePayload.notificationPreferences = updates.notificationPreferences;
+      }
+      if (updates.rewardsOptIn !== undefined) {
+        firestorePayload.rewardsOptIn = updates.rewardsOptIn;
       }
 
       await setDoc(userRef, firestorePayload, { merge: true });

@@ -36,6 +36,12 @@ import {
   Eye,
   Settings,
   Bell,
+  Award,
+  Medal,
+  Printer,
+  Sparkles,
+  Lock,
+  FileCheck,
 } from 'lucide-react';
 import {
   categories,
@@ -48,6 +54,10 @@ import {
   validAuthInput,
   validReportInput,
   validProfileInput,
+  canEditReport,
+  canCancelReport,
+  canWithdrawClaim,
+  calculateUserRewards,
   type Item,
   type ItemType,
   type Claim,
@@ -56,6 +66,8 @@ import {
   type UserNotificationPreferences,
   type AppNotification,
   type NotificationType,
+  type RewardTransaction,
+  type AchievementBadge,
 } from './domain';
 import { isFirebaseConfigured } from './lib/firebase';
 import { authService } from './services/authService';
@@ -64,6 +76,7 @@ import { claimService } from './services/claimService';
 import { reportService } from './services/reportService';
 import { storageService } from './services/storageService';
 import { notificationService } from './services/notificationService';
+import { rewardService } from './services/rewardService';
 
 
 const icons: Record<string, typeof PackageSearch> = {
@@ -91,8 +104,23 @@ export default function App() {
   const [busy, setBusy] = useState(false);
 
   // Dashboard and Requests State
-  const [dashboardTab, setDashboardTab] = useState<'my-reports' | 'my-claims' | 'claims-received'>('my-reports');
+  const [dashboardTab, setDashboardTab] = useState<'my-reports' | 'lost-reports' | 'found-reports' | 'my-claims' | 'claims-received' | 'rewards'>('my-reports');
   const [claimsReceived, setClaimsReceived] = useState<Claim[]>([]);
+  const [rewards, setRewards] = useState<RewardTransaction[]>([]);
+
+  // Edit Report Modal State (with audit safeguards)
+  const [editingItem, setEditingItem] = useState<Item | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editCategory, setEditCategory] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editColor, setEditColor] = useState('');
+  const [editLocation, setEditLocation] = useState('');
+  const [editDate, setEditDate] = useState('');
+  const [editTime, setEditTime] = useState('');
+  const [editError, setEditError] = useState('');
+
+  // Milestone Certificate Modal State
+  const [selectedCertificateBadge, setSelectedCertificateBadge] = useState<AchievementBadge | null>(null);
 
   // Auth Modal State
   const [authOpen, setAuthOpen] = useState(false);
@@ -139,6 +167,7 @@ export default function App() {
   const [profilePhone, setProfilePhone] = useState('');
   const [profileDepartment, setProfileDepartment] = useState('');
   const [profileContactMethod, setProfileContactMethod] = useState<'email' | 'phone' | 'in_person'>('email');
+  const [profileRewardsOptIn, setProfileRewardsOptIn] = useState(true);
   const [profilePrefs, setProfilePrefs] = useState<UserNotificationPreferences>({
     emailMatches: true,
     claimUpdates: true,
@@ -154,6 +183,7 @@ export default function App() {
       setProfilePhone(user.phoneNumber || '');
       setProfileDepartment(user.department || '');
       setProfileContactMethod(user.preferredContactMethod || 'email');
+      setProfileRewardsOptIn(user.rewardsOptIn ?? true);
       setProfilePrefs({
         emailMatches: user.notificationPreferences?.emailMatches ?? true,
         claimUpdates: user.notificationPreferences?.claimUpdates ?? true,
@@ -168,6 +198,7 @@ export default function App() {
     let unsubUserClaims: (() => void) | null = null;
     let unsubClaimsReceived: (() => void) | null = null;
     let unsubNotifications: (() => void) | null = null;
+    let unsubRewards: (() => void) | null = null;
 
     async function init() {
       setLoading(true);
@@ -187,6 +218,8 @@ export default function App() {
         if (isMounted) setClaimsReceived(dedupeById(receivedRes.claims));
         const notifsRes = await notificationService.fetchNotifications(currentUser.id);
         if (isMounted) setNotifications(dedupeById(notifsRes.notifications));
+        const rewardsRes = await rewardService.fetchRewards(currentUser.id);
+        if (isMounted) setRewards(dedupeById(rewardsRes.rewards));
 
         // Attach realtime subscriptions
         unsubUserClaims = claimService.subscribeToClaims(currentUser.id, (userClaims) => {
@@ -197,6 +230,9 @@ export default function App() {
         });
         unsubNotifications = notificationService.subscribeToNotifications(currentUser.id, (notes) => {
           if (isMounted) setNotifications(dedupeById(notes));
+        });
+        unsubRewards = rewardService.subscribeToRewards(currentUser.id, (userRewards) => {
+          if (isMounted) setRewards(dedupeById(userRewards));
         });
       }
     }
@@ -210,6 +246,7 @@ export default function App() {
         if (unsubUserClaims) unsubUserClaims();
         if (unsubClaimsReceived) unsubClaimsReceived();
         if (unsubNotifications) unsubNotifications();
+        if (unsubRewards) unsubRewards();
 
         if (updatedUser) {
           const claimsRes = await claimService.fetchClaims(updatedUser.id);
@@ -218,6 +255,8 @@ export default function App() {
           if (isMounted) setClaimsReceived(dedupeById(receivedRes.claims));
           const notifsRes = await notificationService.fetchNotifications(updatedUser.id);
           if (isMounted) setNotifications(dedupeById(notifsRes.notifications));
+          const rewardsRes = await rewardService.fetchRewards(updatedUser.id);
+          if (isMounted) setRewards(dedupeById(rewardsRes.rewards));
 
           unsubUserClaims = claimService.subscribeToClaims(updatedUser.id, (userClaims) => {
             if (isMounted) setClaims(dedupeById(userClaims));
@@ -228,10 +267,14 @@ export default function App() {
           unsubNotifications = notificationService.subscribeToNotifications(updatedUser.id, (notes) => {
             if (isMounted) setNotifications(dedupeById(notes));
           });
+          unsubRewards = rewardService.subscribeToRewards(updatedUser.id, (userRewards) => {
+            if (isMounted) setRewards(dedupeById(userRewards));
+          });
         } else {
           setClaims([]);
           setClaimsReceived([]);
           setNotifications([]);
+          setRewards([]);
         }
       }
     });
@@ -251,6 +294,7 @@ export default function App() {
       if (unsubUserClaims) unsubUserClaims();
       if (unsubClaimsReceived) unsubClaimsReceived();
       if (unsubNotifications) unsubNotifications();
+      if (unsubRewards) unsubRewards();
     };
   }, []);
 
@@ -260,6 +304,8 @@ export default function App() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (authOpen) setAuthOpen(false);
+        else if (editingItem) setEditingItem(null);
+        else if (selectedCertificateBadge) setSelectedCertificateBadge(null);
         else if (flagTarget) setFlagTarget(null);
         else if (claimTarget) setClaimTarget(null);
         else if (selected) setSelected(null);
@@ -269,7 +315,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [authOpen, flagTarget, claimTarget, selected]);
+  }, [authOpen, editingItem, selectedCertificateBadge, flagTarget, claimTarget, selected, notifyLoserItem, notificationsOpen]);
 
   // 3. Clear Notice Banner After 4 Seconds
   useEffect(() => {
@@ -707,6 +753,7 @@ export default function App() {
       department: profileDepartment,
       preferredContactMethod: profileContactMethod,
       notificationPreferences: profilePrefs,
+      rewardsOptIn: profileRewardsOptIn,
     });
     setBusy(false);
 
@@ -716,6 +763,101 @@ export default function App() {
       setUser(updatedUser);
       setProfileEditing(false);
       setNotice('Profile updated successfully across your devices!');
+    }
+  }
+
+  // Edit Report Handlers with State & Audit Safeguards
+  function startEditReport(item: Item) {
+    if (!user) return;
+    if (!canEditReport(item, user.id)) {
+      setNotice(`Cannot edit report: Listing status is "${item.status}". Once an item has an active claim or is resolved, modifications are locked for verification integrity.`);
+      return;
+    }
+    setEditingItem(item);
+    setEditTitle(item.title);
+    setEditCategory(item.category);
+    setEditDescription(item.description);
+    setEditColor(item.color || '');
+    setEditLocation(item.location);
+    setEditDate(item.date);
+    setEditTime(item.time || '');
+    setEditError('');
+  }
+
+  async function handleSaveEditReport(e: FormEvent) {
+    e.preventDefault();
+    if (!user || !editingItem) return;
+
+    const validation = validItemInput({
+      title: editTitle,
+      category: editCategory,
+      description: editDescription,
+      location: editLocation,
+      date: editDate,
+    });
+    if (Object.keys(validation).length) {
+      setEditError(Object.values(validation)[0]);
+      return;
+    }
+
+    setBusy(true);
+    const { error } = await itemService.updateItemDetails(
+      editingItem.id,
+      {
+        title: editTitle,
+        category: editCategory,
+        description: editDescription,
+        color: editColor,
+        location: editLocation,
+        date: editDate,
+        time: editTime,
+      },
+      user.id,
+    );
+    setBusy(false);
+
+    if (error) {
+      setEditError(error);
+    } else {
+      setItems((prev) =>
+        prev.map((i) =>
+          i.id === editingItem.id
+            ? {
+                ...i,
+                title: editTitle,
+                category: editCategory,
+                description: editDescription,
+                color: editColor,
+                location: editLocation,
+                date: editDate,
+                time: editTime,
+                updatedAt: new Date().toISOString(),
+              }
+            : i,
+        ),
+      );
+      setNotice('Report details updated successfully in the campus database.');
+      setEditingItem(null);
+    }
+  }
+
+  async function handleCancelReport(item: Item) {
+    if (!user) return;
+    if (!canCancelReport(item, user.id)) {
+      setNotice(`Cannot cancel report: Status is "${item.status}". Listings with active claims or completed resolutions cannot be deleted.`);
+      return;
+    }
+    if (!confirm(`Are you sure you want to cancel and remove your ${item.type} report for "${item.title}"?`)) return;
+
+    setBusy(true);
+    const { error } = await itemService.cancelReport(item.id, user.id);
+    setBusy(false);
+
+    if (error) {
+      setNotice(error);
+    } else {
+      setItems((prev) => prev.filter((i) => i.id !== item.id));
+      setNotice('Report successfully canceled and removed from campus records.');
     }
   }
 
@@ -829,6 +971,21 @@ export default function App() {
   const myFoundItems = useMemo(
     () => myItems.filter((i) => i.type === 'found' && i.status !== 'Recovered'),
     [myItems],
+  );
+
+  const myLostItems = useMemo(
+    () => myItems.filter((i) => i.type === 'lost'),
+    [myItems],
+  );
+
+  const myAllFoundItems = useMemo(
+    () => myItems.filter((i) => i.type === 'found'),
+    [myItems],
+  );
+
+  const { totalPoints, badges } = useMemo(
+    () => calculateUserRewards(rewards),
+    [rewards],
   );
 
   const unreadCount = useMemo(
@@ -1571,35 +1728,51 @@ export default function App() {
           {/* Responsive Dashboard Tabs */}
           <div className="dashboard-tabs" style={{ marginBottom: '24px' }}>
             <button
-              className={`dashboard-tab ${dashboardTab === 'my-reports' ? 'active' : ''}`}
-              onClick={() => setDashboardTab('my-reports')}
+              className={`dashboard-tab ${dashboardTab === 'my-reports' || dashboardTab === 'lost-reports' ? 'active' : ''}`}
+              onClick={() => setDashboardTab('lost-reports')}
             >
-              <PackageSearch size={15} /> My Reports
-              <span className="tab-badge">{myItems.length}</span>
+              <PackageSearch size={15} /> Lost Reports
+              <span className="tab-badge">{myLostItems.length}</span>
+            </button>
+            <button
+              className={`dashboard-tab ${dashboardTab === 'found-reports' ? 'active' : ''}`}
+              onClick={() => setDashboardTab('found-reports')}
+            >
+              <PackageSearch size={15} /> Found Reports
+              <span className="tab-badge">{myAllFoundItems.length}</span>
             </button>
             <button
               className={`dashboard-tab ${dashboardTab === 'my-claims' ? 'active' : ''}`}
               onClick={() => setDashboardTab('my-claims')}
             >
-              <Send size={15} /> My Claims
+              <Send size={15} /> Submitted Claims
               <span className="tab-badge">{claims.length}</span>
             </button>
             <button
               className={`dashboard-tab ${dashboardTab === 'claims-received' ? 'active' : ''}`}
               onClick={() => setDashboardTab('claims-received')}
             >
-              <Inbox size={15} /> Claims Received
+              <Inbox size={15} /> Received Claims
               <span className="tab-badge">{claimsReceived.length}</span>
+            </button>
+            <button
+              className={`dashboard-tab ${dashboardTab === 'rewards' ? 'active' : ''}`}
+              onClick={() => setDashboardTab('rewards')}
+            >
+              <Award size={15} /> Rewards & Badges
+              <span className="tab-badge">{totalPoints} pts</span>
             </button>
           </div>
 
-          {/* TAB 1: MY REPORTS */}
-          {dashboardTab === 'my-reports' && (
+          {/* TAB 1: LOST REPORTS */}
+          {(dashboardTab === 'my-reports' || dashboardTab === 'lost-reports') && (
             <div>
-              {myItems.length ? (
+              {myLostItems.length ? (
                 <div className="dashboard-list">
-                  {myItems.map((item) => {
+                  {myLostItems.map((item) => {
                     const matchesCount = findMatches(item, items).length;
+                    const isEditable = canEditReport(item, user?.id);
+                    const isCancelable = canCancelReport(item, user?.id);
                     return (
                       <article className="dashboard-card" key={item.id}>
                         <div className="dashboard-card-main">
@@ -1612,9 +1785,7 @@ export default function App() {
                           )}
                           <div className="dashboard-card-info">
                             <div className="dashboard-card-meta">
-                              <span className={`type-pill ${item.type}`}>
-                                {item.type === 'lost' ? 'LOST REPORT' : 'FOUND LISTING'}
-                              </span>
+                              <span className="type-pill lost">LOST REPORT</span>
                               <span className="status-pill">{item.status}</span>
                               {item.isDemo && <span className="demo-tag">DEMO</span>}
                             </div>
@@ -1643,13 +1814,36 @@ export default function App() {
                               <Check size={14} /> Mark recovered
                             </button>
                           )}
-                          <button
-                            className="button ghost"
-                            onClick={() => handleDeleteItem(item.id)}
-                            style={{ color: '#b5483d' }}
-                          >
-                            <Trash2 size={14} /> Delete
-                          </button>
+                          {isEditable ? (
+                            <button className="button secondary" onClick={() => startEditReport(item)}>
+                              <Edit3 size={14} /> Edit report
+                            </button>
+                          ) : (
+                            <span
+                              className="button secondary"
+                              style={{ opacity: 0.6, cursor: 'not-allowed', fontSize: '11px', padding: '9px 13px' }}
+                              title={`Locked: Status is "${item.status}". Reports with active claims or resolutions are locked for audit safety.`}
+                            >
+                              <Lock size={13} /> Edit locked
+                            </span>
+                          )}
+                          {isCancelable ? (
+                            <button
+                              className="button ghost"
+                              onClick={() => handleCancelReport(item)}
+                              style={{ color: '#b5483d' }}
+                            >
+                              <Trash2 size={14} /> Cancel report
+                            </button>
+                          ) : (
+                            <span
+                              className="button ghost"
+                              style={{ opacity: 0.5, cursor: 'not-allowed', fontSize: '11px', color: '#889689' }}
+                              title={`Protected: Report status is "${item.status}" and must be preserved for audit safety.`}
+                            >
+                              <Lock size={13} /> Deletion locked
+                            </span>
+                          )}
                         </div>
                       </article>
                     );
@@ -1658,8 +1852,8 @@ export default function App() {
               ) : (
                 <div className="empty-state">
                   <PackageSearch size={38} />
-                  <h3>No reports created yet</h3>
-                  <p>When you lose or find an item on campus, report it here to synchronize with the campus database.</p>
+                  <h3>No lost reports created yet</h3>
+                  <p>Misplaced something on campus? File a lost report so finders can match and safely return your belongings.</p>
                   <button
                     className="button primary"
                     onClick={() => {
@@ -1667,20 +1861,130 @@ export default function App() {
                       go('report');
                     }}
                   >
-                    Report an item <ArrowRight size={16} />
+                    Report lost item <ArrowRight size={16} />
                   </button>
                 </div>
               )}
             </div>
           )}
 
-          {/* TAB 2: MY CLAIMS */}
+          {/* TAB 2: FOUND REPORTS */}
+          {dashboardTab === 'found-reports' && (
+            <div>
+              {myAllFoundItems.length ? (
+                <div className="dashboard-list">
+                  {myAllFoundItems.map((item) => {
+                    const isEditable = canEditReport(item, user?.id);
+                    const isCancelable = canCancelReport(item, user?.id);
+                    const incomingClaims = claimsReceived.filter((c) => c.itemId === item.id);
+                    return (
+                      <article className="dashboard-card" key={item.id}>
+                        <div className="dashboard-card-main">
+                          {item.imageUrl || item.image ? (
+                            <img src={item.imageUrl || item.image} alt={item.title} className="dashboard-card-thumb" />
+                          ) : (
+                            <div className="dashboard-card-icon" style={{ background: '#e9f1ed', color: '#3b715f' }}>
+                              <PackageSearch size={28} />
+                            </div>
+                          )}
+                          <div className="dashboard-card-info">
+                            <div className="dashboard-card-meta">
+                              <span className="type-pill found">FOUND LISTING</span>
+                              <span className="status-pill">{item.status}</span>
+                              {item.handover && (
+                                <span style={{ fontSize: '10px', color: '#3d6c42', background: '#e9f4e6', padding: '3px 7px', borderRadius: '4px', fontWeight: 700 }}>
+                                  AT CAMPUS DESK
+                                </span>
+                              )}
+                              {item.isDemo && <span className="demo-tag">DEMO</span>}
+                            </div>
+                            <h3 className="dashboard-card-title">{item.title}</h3>
+                            <p className="dashboard-card-desc">{item.description}</p>
+                            <div className="dashboard-card-facts">
+                              <span>
+                                <MapPin size={13} /> {item.location}
+                              </span>
+                              <span>
+                                <CalendarDays size={13} /> {item.date}
+                              </span>
+                              <span>
+                                <Inbox size={13} />{' '}
+                                <b>{incomingClaims.length}</b> {incomingClaims.length === 1 ? 'claim' : 'claims'} received
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="dashboard-actions">
+                          <button className="button secondary" onClick={() => setSelected(item)}>
+                            <Eye size={14} /> View listing
+                          </button>
+                          {item.status !== 'Recovered' && item.status !== 'Closed' && (
+                            <button className="button primary" onClick={() => closeItem(item.id)}>
+                              <Check size={14} /> Mark returned
+                            </button>
+                          )}
+                          {isEditable ? (
+                            <button className="button secondary" onClick={() => startEditReport(item)}>
+                              <Edit3 size={14} /> Edit details
+                            </button>
+                          ) : (
+                            <span
+                              className="button secondary"
+                              style={{ opacity: 0.6, cursor: 'not-allowed', fontSize: '11px', padding: '9px 13px' }}
+                              title={`Locked: Status is "${item.status}". Found items with claims or completed handovers are locked.`}
+                            >
+                              <Lock size={13} /> Edit locked
+                            </span>
+                          )}
+                          {isCancelable ? (
+                            <button
+                              className="button ghost"
+                              onClick={() => handleCancelReport(item)}
+                              style={{ color: '#b5483d' }}
+                            >
+                              <Trash2 size={14} /> Cancel listing
+                            </button>
+                          ) : (
+                            <span
+                              className="button ghost"
+                              style={{ opacity: 0.5, cursor: 'not-allowed', fontSize: '11px', color: '#889689' }}
+                              title={`Protected: Report status is "${item.status}" and must be preserved for audit safety.`}
+                            >
+                              <Lock size={13} /> Deletion locked
+                            </span>
+                          )}
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="empty-state">
+                  <PackageSearch size={38} />
+                  <h3>No found items posted yet</h3>
+                  <p>Found something on campus? Register it to help the owner reclaim it safely and earn community reward points!</p>
+                  <button
+                    className="button primary"
+                    onClick={() => {
+                      setFormType('found');
+                      go('report');
+                    }}
+                  >
+                    Report found item <ArrowRight size={16} />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 3: SUBMITTED CLAIMS */}
           {dashboardTab === 'my-claims' && (
             <div>
               {claims.length ? (
                 <div className="dashboard-list">
                   {claims.map((c) => {
                     const relatedItem = items.find((i) => i.id === c.itemId);
+                    const canWithdraw = canWithdrawClaim(c, user?.id);
                     return (
                       <article className="dashboard-card" key={c.id}>
                         <div className="dashboard-card-main">
@@ -1749,10 +2053,18 @@ export default function App() {
                               <Eye size={14} /> View listing
                             </button>
                           )}
-                          {c.status === 'Pending' && (
+                          {canWithdraw ? (
                             <button className="button ghost" onClick={() => handleWithdrawClaim(c.id)}>
                               Withdraw claim
                             </button>
+                          ) : (
+                            <span
+                              className="button ghost"
+                              style={{ opacity: 0.6, cursor: 'not-allowed', fontSize: '11px', color: '#889689' }}
+                              title={`Safeguard: Status is "${c.status}". Once approved or completed, claims cannot be withdrawn.`}
+                            >
+                              <Lock size={12} /> Claim locked
+                            </span>
                           )}
                         </div>
                       </article>
@@ -1778,7 +2090,7 @@ export default function App() {
             </div>
           )}
 
-          {/* TAB 3: CLAIMS RECEIVED (Items you found, claimed by others) */}
+          {/* TAB 4: CLAIMS RECEIVED (Items you found, claimed by others) */}
           {dashboardTab === 'claims-received' && (
             <div>
               {claimsReceived.length ? (
@@ -1864,12 +2176,12 @@ export default function App() {
                           )}
                           {c.status === 'Approved' && (
                             <button className="button primary" onClick={() => handleConfirmReturn(c)}>
-                              <CheckCircle2 size={14} /> Confirm return
+                              <CheckCircle2 size={14} /> Confirm return (+50 pts)
                             </button>
                           )}
                           {c.status === 'Completed' && (
                             <span style={{ fontSize: '11px', color: '#567a42', fontWeight: 700, textAlign: 'center' }}>
-                              ✓ Return completed
+                              ✓ Return completed (+50 pts earned)
                             </span>
                           )}
                         </div>
@@ -1884,6 +2196,126 @@ export default function App() {
                   <p>When someone submits an ownership claim for an item you found, their private verification proof will appear here for your review.</p>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* TAB 5: REWARDS & HONESTY RECOGNITION */}
+          {dashboardTab === 'rewards' && (
+            <div>
+              {/* Header Points Summary */}
+              <div className="rewards-header-card">
+                <div className="rewards-header-copy">
+                  <span className="eyebrow" style={{ color: '#d8f27d' }}>CAMPUS HONESTY & TRUST RECOGNITION</span>
+                  <h2>Community Reward Points</h2>
+                  <p>
+                    CampusFind honors honest finders who take the time to reconnect students with lost belongings.
+                    Points are verified through real handover completions and stored in an immutable community ledger.
+                  </p>
+                </div>
+                <div className="rewards-points-pill">
+                  <b>{totalPoints}</b>
+                  <small>Verified Points</small>
+                </div>
+              </div>
+
+              {/* Anti-Gaming Eligibility Rules Banner */}
+              <div className="eligibility-rules-banner">
+                <ShieldCheck size={22} />
+                <div>
+                  <b>Eligibility & Anti-Gaming Integrity Rules</b>
+                  <p>
+                    Points are awarded exclusively for <b>verified helpful actions</b>:
+                    reuniting an item with its confirmed owner (+50 pts), turning in a verified item at campus security (+25 pts),
+                    or providing match notifications that result in verified recovery (+15 pts).
+                    Points are <b>never awarded</b> merely for posting reports or submitting self-claims. Duplicate rewards for the same item are blocked.
+                  </p>
+                </div>
+              </div>
+
+              {/* Achievement Badges Grid */}
+              <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ font: '800 18px Manrope', margin: 0, color: 'var(--deep)' }}>
+                  Achievement Badges & Recognition
+                </h3>
+                <span style={{ fontSize: '12px', color: '#6d7f72' }}>
+                  {badges.filter((b) => b.unlocked).length} of {badges.length} Unlocked
+                </span>
+              </div>
+
+              <div className="badges-grid">
+                {badges.map((b) => (
+                  <div className={`badge-card ${b.unlocked ? 'unlocked' : 'locked'}`} key={b.id}>
+                    <span className="badge-icon">{b.icon}</span>
+                    <h4>{b.name}</h4>
+                    <p>{b.description}</p>
+                    <span className={`badge-status ${b.unlocked ? 'unlocked' : 'locked'}`}>
+                      {b.unlocked ? 'Unlocked' : `${totalPoints}/${b.minPoints} pts`}
+                    </span>
+                    {b.unlocked && (
+                      <button
+                        className="button secondary badge-cert-btn"
+                        onClick={() => setSelectedCertificateBadge(b)}
+                      >
+                        <FileCheck size={13} /> View Certificate
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Rewards Points Ledger History */}
+              <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ font: '800 18px Manrope', margin: 0, color: 'var(--deep)' }}>
+                  Points Transaction Ledger
+                </h3>
+                <span style={{ fontSize: '11px', color: '#7b8c80' }}>
+                  Immutable Audit History ({rewards.length} {rewards.length === 1 ? 'entry' : 'entries'})
+                </span>
+              </div>
+
+              <div className="rewards-ledger-wrap">
+                {rewards.length ? (
+                  <table className="rewards-ledger-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Action</th>
+                        <th>Item / Reference</th>
+                        <th>Points</th>
+                        <th>Audit Description</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rewards.map((r) => (
+                        <tr key={r.id}>
+                          <td style={{ whiteSpace: 'nowrap' }}>
+                            {new Date(r.createdAt).toLocaleDateString()}
+                          </td>
+                          <td>
+                            <span className="type-pill found" style={{ textTransform: 'uppercase' }}>
+                              {r.action.replace('_', ' ')}
+                            </span>
+                          </td>
+                          <td style={{ fontWeight: 600 }}>{r.targetTitle || r.targetId}</td>
+                          <td className="points-positive">+{r.points} pts</td>
+                          <td style={{ color: '#5f7365' }}>{r.description}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div style={{ textAlign: 'center', padding: '36px 20px', color: '#7a8c7e' }}>
+                    <Sparkles size={32} style={{ color: '#8aa65b', margin: '0 auto 10px', display: 'block' }} />
+                    <b style={{ display: 'block', fontSize: '14px', color: 'var(--deep)', marginBottom: '4px' }}>
+                      No point transactions recorded yet
+                    </b>
+                    <p style={{ margin: 0, fontSize: '12px', maxWidth: '420px', marginLeft: 'auto', marginRight: 'auto', lineHeight: 1.6 }}>
+                      When you find an item on campus, approve a rightful claim, and confirm the item handover,
+                      your 50 verified reward points will be recorded here!
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </main>
@@ -1930,7 +2362,7 @@ export default function App() {
               <p className="profile-email">{user.email}</p>
               <span className={`role-badge ${user.role}`}>{user.role || 'Student'}</span>
 
-              <div className="profile-stats">
+              <div className="profile-stats" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
                 <div className="profile-stat-box">
                   <b>{myItems.length}</b>
                   <small>Reports</small>
@@ -1939,17 +2371,31 @@ export default function App() {
                   <b>{claims.length}</b>
                   <small>Claims</small>
                 </div>
+                <div className="profile-stat-box">
+                  <b style={{ color: '#447833' }}>{totalPoints}</b>
+                  <small>Points</small>
+                </div>
               </div>
 
               <div className="profile-shortcuts">
                 <button
                   className="profile-shortcut-link"
                   onClick={() => {
-                    setDashboardTab('my-reports');
+                    setDashboardTab('lost-reports');
                     go('dashboard');
                   }}
                 >
-                  <span>My Reports</span>
+                  <span>Lost Reports ({myLostItems.length})</span>
+                  <ArrowRight size={13} />
+                </button>
+                <button
+                  className="profile-shortcut-link"
+                  onClick={() => {
+                    setDashboardTab('found-reports');
+                    go('dashboard');
+                  }}
+                >
+                  <span>Found Reports ({myAllFoundItems.length})</span>
                   <ArrowRight size={13} />
                 </button>
                 <button
@@ -1959,7 +2405,7 @@ export default function App() {
                     go('dashboard');
                   }}
                 >
-                  <span>My Claims</span>
+                  <span>Submitted Claims ({claims.length})</span>
                   <ArrowRight size={13} />
                 </button>
                 <button
@@ -1969,7 +2415,17 @@ export default function App() {
                     go('dashboard');
                   }}
                 >
-                  <span>Claims Received</span>
+                  <span>Received Claims ({claimsReceived.length})</span>
+                  <ArrowRight size={13} />
+                </button>
+                <button
+                  className="profile-shortcut-link"
+                  onClick={() => {
+                    setDashboardTab('rewards');
+                    go('dashboard');
+                  }}
+                >
+                  <span style={{ fontWeight: 800, color: '#3d6c35' }}>Honesty Rewards & Badges</span>
                   <ArrowRight size={13} />
                 </button>
                 <button className="profile-shortcut-link" onClick={() => go('browse')}>
@@ -2102,6 +2558,19 @@ export default function App() {
                       onChange={(e) =>
                         setProfilePrefs((prev) => ({ ...prev, newClaimsReceived: e.target.checked }))
                       }
+                    />
+                  </label>
+                  <label className="pref-toggle-row">
+                    <div className="pref-toggle-info">
+                      <b>Participate in Campus Honesty Rewards System (Optional)</b>
+                      <small>Earn verified community reward points, achievement badges, and recognition certificates when returning items.</small>
+                    </div>
+                    <input
+                      type="checkbox"
+                      className="pref-toggle-input"
+                      checked={profileRewardsOptIn}
+                      disabled={!profileEditing}
+                      onChange={(e) => setProfileRewardsOptIn(e.target.checked)}
                     />
                   </label>
                 </div>
@@ -2656,6 +3125,201 @@ export default function App() {
               </button>
             </form>
           </section>
+        </div>
+      )}
+
+      {/* Edit Report Modal with Audit Safeguards */}
+      {editingItem && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setEditingItem(null);
+          }}
+        >
+          <section className="detail-modal" role="dialog" aria-modal="true" aria-labelledby="edit-report-title">
+            <button className="modal-close" onClick={() => setEditingItem(null)} aria-label="Close edit dialog">
+              <X />
+            </button>
+            <span className="eyebrow">EDIT REPORT</span>
+            <h2 id="edit-report-title">
+              Edit {editingItem.type === 'lost' ? 'Lost Report' : 'Found Listing'}
+            </h2>
+            <div className="privacy-note" style={{ background: '#f5f7ee', borderColor: '#dbe3cc' }}>
+              <ShieldCheck size={18} />
+              <p>
+                <b>Cloud Audit Safeguard:</b> Updates to this report synchronize across all devices.
+                Status is <b>{editingItem.status}</b>.
+              </p>
+            </div>
+
+            {editError && <div className="auth-error">{editError}</div>}
+
+            <form onSubmit={handleSaveEditReport}>
+              <div className="form-grid">
+                <Field label="Item title" wide>
+                  <input
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    maxLength={100}
+                    required
+                  />
+                </Field>
+
+                <Field label="Category">
+                  <select
+                    value={editCategory}
+                    onChange={(e) => setEditCategory(e.target.value)}
+                    required
+                  >
+                    {categories.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </Field>
+
+                <Field label="Color / visible features">
+                  <input
+                    value={editColor}
+                    onChange={(e) => setEditColor(e.target.value)}
+                    placeholder="e.g. Navy blue, matte"
+                    maxLength={100}
+                  />
+                </Field>
+
+                <Field label="Location" wide>
+                  <input
+                    value={editLocation}
+                    onChange={(e) => setEditLocation(e.target.value)}
+                    maxLength={150}
+                    required
+                  />
+                </Field>
+
+                <Field label="Date">
+                  <input
+                    type="date"
+                    value={editDate}
+                    max={getTodayDateString()}
+                    onChange={(e) => setEditDate(e.target.value)}
+                    required
+                  />
+                </Field>
+
+                <Field label="Approximate time (optional)">
+                  <input
+                    type="time"
+                    value={editTime}
+                    onChange={(e) => setEditTime(e.target.value)}
+                  />
+                </Field>
+
+                <Field label="Detailed description" wide>
+                  <textarea
+                    rows={4}
+                    value={editDescription}
+                    onChange={(e) => setEditDescription(e.target.value)}
+                    maxLength={2000}
+                    required
+                  />
+                </Field>
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
+                <button className="button primary submit-button" type="submit" disabled={busy}>
+                  {busy ? <Loader2 className="animate-spin" size={16} /> : 'Save report updates'}
+                </button>
+                <button className="button secondary" type="button" onClick={() => setEditingItem(null)}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {/* Milestone Digital Certificate of Appreciation Modal */}
+      {selectedCertificateBadge && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setSelectedCertificateBadge(null);
+          }}
+        >
+          <div className="certificate-modal" role="dialog" aria-modal="true" aria-labelledby="cert-title">
+            <button
+              className="modal-close"
+              onClick={() => setSelectedCertificateBadge(null)}
+              aria-label="Close certificate"
+            >
+              <X />
+            </button>
+
+            <div className="certificate-frame">
+              <div className="certificate-seal">
+                <Medal size={34} />
+              </div>
+
+              <div className="certificate-institution">
+                CAMPUSFIND · HONOR & COMMUNITY INTEGRITY NETWORK
+              </div>
+
+              <h2 className="certificate-title" id="cert-title">
+                Certificate of Appreciation
+              </h2>
+
+              <p className="certificate-subtitle">
+                This official recognition is gratefully presented to
+              </p>
+
+              <div className="certificate-recipient">
+                {user?.displayName || 'Campus Honored Member'}
+              </div>
+
+              <p className="certificate-reason">
+                For exceptional honesty, civic responsibility, and active dedication to reuniting
+                lost belongings on campus. In recognition of achieving the{' '}
+                <b>{selectedCertificateBadge.name}</b> community milestone with{' '}
+                <b>{totalPoints} verified community points</b>.
+              </p>
+
+              <div className="certificate-meta-row">
+                <div style={{ textAlign: 'left' }}>
+                  <div style={{ fontSize: '10px', color: '#88988b' }}>VERIFICATION CODE</div>
+                  <div style={{ fontFamily: 'monospace', fontWeight: 700, color: '#173d31' }}>
+                    CF-{(user?.id || 'CAMPUS').slice(0, 8).toUpperCase()}-{selectedCertificateBadge.id.toUpperCase()}
+                  </div>
+                  <div style={{ fontSize: '10px', color: '#7a8c7e', marginTop: '4px' }}>
+                    Issued: {new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
+                  </div>
+                </div>
+
+                <div style={{ textAlign: 'center' }}>
+                  <div className="certificate-sig-line">Campus Committee</div>
+                  <small style={{ fontSize: '10px', color: '#88988b' }}>Lost & Found Authority</small>
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-actions" style={{ justifyContent: 'center', marginTop: '24px' }}>
+              <button
+                className="button primary"
+                onClick={() => {
+                  try {
+                    window.print();
+                  } catch (e) {
+                    console.warn('Print dialog notice:', e);
+                  }
+                }}
+              >
+                <Printer size={15} /> Print / Save as PDF
+              </button>
+              <button className="button secondary" onClick={() => setSelectedCertificateBadge(null)}>
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

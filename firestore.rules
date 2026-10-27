@@ -95,7 +95,7 @@ service cloud.firestore {
 
     function isValidUserProfile(data) {
       return data.keys().hasAll(['id', 'email', 'displayName', 'role', 'createdAt']) &&
-        data.keys().hasOnly(['id', 'email', 'displayName', 'avatarUrl', 'phoneNumber', 'department', 'preferredContactMethod', 'notificationPreferences', 'role', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'email', 'displayName', 'avatarUrl', 'phoneNumber', 'department', 'preferredContactMethod', 'notificationPreferences', 'rewardsOptIn', 'role', 'createdAt', 'updatedAt']) &&
         data.id is string && data.id.size() <= 128 &&
         data.email is string && data.email.size() <= 150 &&
         data.displayName is string && data.displayName.size() <= 100 &&
@@ -104,7 +104,20 @@ service cloud.firestore {
         (!('department' in data) || (data.department is string && data.department.size() <= 150)) &&
         (!('preferredContactMethod' in data) || data.preferredContactMethod in ['email', 'phone', 'in_person']) &&
         (!('notificationPreferences' in data) || data.notificationPreferences is map) &&
+        (!('rewardsOptIn' in data) || data.rewardsOptIn is bool) &&
         data.role in ['student', 'staff', 'moderator', 'admin'] &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidReward(data) {
+      return data.keys().hasAll(['userId', 'action', 'points', 'targetId', 'description', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'userId', 'action', 'points', 'targetId', 'targetTitle', 'description', 'createdAt']) &&
+        data.userId is string && data.userId.size() <= 128 &&
+        data.action in ['item_returned', 'found_item_verified', 'match_assisted'] &&
+        data.points is int && data.points > 0 && data.points <= 500 &&
+        data.targetId is string && data.targetId.size() <= 128 &&
+        (!('targetTitle' in data) || (data.targetTitle is string && data.targetTitle.size() <= 120)) &&
+        data.description is string && data.description.size() <= 300 &&
         data.createdAt is timestamp;
     }
 
@@ -267,7 +280,7 @@ service cloud.firestore {
             incoming().role == existing().role &&
             incoming().createdAt == existing().createdAt &&
             incoming().updatedAt == request.time &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'avatarUrl', 'phoneNumber', 'department', 'preferredContactMethod', 'notificationPreferences', 'updatedAt'])
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'avatarUrl', 'phoneNumber', 'department', 'preferredContactMethod', 'notificationPreferences', 'rewardsOptIn', 'updatedAt'])
           )
         );
 
@@ -307,6 +320,20 @@ service cloud.firestore {
       allow delete: if isSignedIn()
         && isValidId(notificationId)
         && (resource.data.recipientId == request.auth.uid || isAdmin());
+    }
+
+    // 6. Rewards Collection: Points ledger for verified community actions
+    match /rewards/{rewardId} {
+      allow get, list: if isSignedIn()
+        && (resource.data.userId == request.auth.uid || isAdmin());
+
+      allow create: if isSignedIn()
+        && isValidId(rewardId)
+        && isValidReward(incoming())
+        && incoming().userId == request.auth.uid
+        && incoming().createdAt == request.time;
+
+      allow update, delete: if isAdmin() && isValidId(rewardId);
     }
   }
 }

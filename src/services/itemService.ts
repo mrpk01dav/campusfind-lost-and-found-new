@@ -2,6 +2,7 @@ import {
   collection,
   doc,
   getDocs,
+  getDoc,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -186,6 +187,54 @@ export const itemService = {
     } catch (err: any) {
       console.error('Error updating item status:', err);
       handleFirestoreError(err, OperationType.UPDATE, `items/${itemId}`);
+    }
+  },
+
+  async updateItemDetails(
+    itemId: string,
+    updates: Partial<Item>,
+    userId: string,
+  ): Promise<{ error: string | null }> {
+    try {
+      const itemRef = doc(db, 'items', itemId);
+      const snap = await getDoc(itemRef);
+      if (!snap.exists()) {
+        return { error: 'Report not found.' };
+      }
+      const data = snap.data();
+      if (data.ownerId !== userId) {
+        return { error: 'Unauthorized: You can only edit your own reports.' };
+      }
+      if (['Claim Pending', 'Recovered', 'Closed'].includes(data.status)) {
+        return {
+          error: `Cannot edit report while status is "${data.status}". Items with active claims or completed resolutions are locked for audit safety.`,
+        };
+      }
+      return this.updateItem(itemId, updates);
+    } catch (err: any) {
+      console.error('Error updating item details:', err);
+      return { error: err.message || 'Failed to update report.' };
+    }
+  },
+
+  async cancelReport(itemId: string, userId: string): Promise<{ error: string | null }> {
+    try {
+      const itemRef = doc(db, 'items', itemId);
+      const snap = await getDoc(itemRef);
+      if (!snap.exists()) return { error: null };
+      const data = snap.data();
+      if (data.ownerId !== userId) {
+        return { error: 'Unauthorized: You can only cancel your own reports.' };
+      }
+      if (['Claim Pending', 'Recovered'].includes(data.status)) {
+        return {
+          error: `Cannot cancel report while status is "${data.status}". Items with pending or completed claims cannot be deleted.`,
+        };
+      }
+      return this.deleteItem(itemId);
+    } catch (err: any) {
+      console.error('Error canceling report:', err);
+      return { error: err.message || 'Failed to cancel report.' };
     }
   },
 

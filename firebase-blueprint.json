@@ -306,6 +306,51 @@
         }
       },
       "required": ["recipientId", "senderId", "type", "title", "message", "itemId", "read", "createdAt"]
+    },
+    "RewardTransaction": {
+      "title": "RewardTransaction",
+      "description": "Points ledger record awarded for verified helpful community actions",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the reward transaction"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Firebase UID of the rewarded member"
+        },
+        "action": {
+          "type": "string",
+          "enum": ["item_returned", "found_item_verified", "match_assisted"],
+          "description": "Type of verified helpful action performed"
+        },
+        "points": {
+          "type": "integer",
+          "description": "Number of reward points awarded"
+        },
+        "targetId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Referenced claim or item ID for duplicate prevention"
+        },
+        "targetTitle": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Title of the associated item"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "Contextual description of the reward"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Timestamp of point ledger entry"
+        }
+      },
+      "required": ["userId", "action", "points", "targetId", "description", "createdAt"]
     }
   },
   "firestore": {
@@ -338,6 +383,12 @@
         "$ref": "#/entities/Notification"
       },
       "description": "In-app notifications and match alerts"
+    },
+    "/rewards/{rewardId}": {
+      "schema": {
+        "$ref": "#/entities/RewardTransaction"
+      },
+      "description": "Verified reward points ledger and audit history"
     }
   }
 }

@@ -45,4 +45,18 @@ describe('Firestore Security Rules Hardening Audit', () => {
     expect(rules).toContain('resource.data.recipientId == request.auth.uid');
     expect(rules).toContain('function isValidNotification(data)');
   });
+
+  it('secures rewards collection points ledger and restricts creation to self', () => {
+    expect(rules).toContain('match /rewards/{rewardId}');
+    expect(rules).toContain('resource.data.userId == request.auth.uid');
+    expect(rules).toContain('incoming().userId == request.auth.uid');
+    expect(rules).toContain('function isValidReward(data)');
+    expect(rules).toContain("data.action in ['item_returned', 'found_item_verified', 'match_assisted']");
+  });
+
+  it('enforces secure self-only user profile editing with rewardsOptIn', () => {
+    expect(rules).toContain('match /users/{userId}');
+    expect(rules).toContain('request.auth.uid == userId');
+    expect(rules).toContain('rewardsOptIn');
+  });
 });

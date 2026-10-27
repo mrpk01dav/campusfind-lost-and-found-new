@@ -63,6 +63,14 @@ vi.mock('../src/services/itemService', () => ({
       mockItems = mockItems.filter((i) => i.id !== id);
       return { error: null };
     }),
+    updateItemDetails: vi.fn(async (id, updates) => {
+      mockItems = mockItems.map((i) => (i.id === id ? { ...i, ...updates } : i));
+      return { error: null };
+    }),
+    cancelReport: vi.fn(async (id) => {
+      mockItems = mockItems.filter((i) => i.id !== id);
+      return { error: null };
+    }),
     seedDevData: vi.fn(async () => {
       mockItems = [...demoItems];
       return { inserted: 5, error: null };
@@ -94,6 +102,45 @@ vi.mock('../src/services/claimService', () => ({
   },
 }));
 
+vi.mock('../src/services/rewardService', () => ({
+  rewardService: {
+    fetchRewards: vi.fn(async () => ({
+      rewards: [
+        {
+          id: 'rw-1',
+          userId: 'usr-test-1',
+          action: 'item_returned',
+          points: 50,
+          targetId: 'demo-found-notebook',
+          targetTitle: 'Blue lecture notebook',
+          description: 'Verified safe return of item to owner.',
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      error: null,
+    })),
+    awardRewardPoints: vi.fn(async () => ({
+      reward: null,
+      alreadyAwarded: false,
+      error: null,
+    })),
+    subscribeToRewards: vi.fn((_uid, cb) => {
+      cb([
+        {
+          id: 'rw-1',
+          userId: 'usr-test-1',
+          action: 'item_returned',
+          points: 50,
+          targetId: 'demo-found-notebook',
+          targetTitle: 'Blue lecture notebook',
+          description: 'Verified safe return of item to owner.',
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      return () => {};
+    }),
+  },
+}));
 
 vi.mock('../src/services/reportService', () => ({
   reportService: {
@@ -237,32 +284,68 @@ describe('CampusFind Cloud-Synced Platform Integration', () => {
     });
   });
 
-  it('navigates to the Dashboard and switches between My Reports, My Claims, and Claims Received', async () => {
+  it('navigates to the Dashboard and switches between Lost Reports, Found Reports, Claims, and Rewards', async () => {
     render(<App />);
     const claimsNavButtons = screen.getAllByRole('button', { name: /My claims/i });
     fireEvent.click(claimsNavButtons[0]);
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /Request Dashboard/i })).toBeDefined();
-      expect(screen.getByRole('button', { name: /My Reports/i })).toBeDefined();
-      expect(screen.getAllByRole('button', { name: /My Claims/i }).length).toBeGreaterThanOrEqual(2);
-      expect(screen.getByRole('button', { name: /Claims Received/i })).toBeDefined();
+      expect(screen.getByRole('button', { name: /Lost Reports/i })).toBeDefined();
+      expect(screen.getByRole('button', { name: /Found Reports/i })).toBeDefined();
+      expect(screen.getByRole('button', { name: /Submitted Claims/i })).toBeDefined();
+      expect(screen.getByRole('button', { name: /Received Claims/i })).toBeDefined();
+      expect(screen.getByRole('button', { name: /Rewards & Badges/i })).toBeDefined();
     });
 
-    // Switch to Claims Received tab
-    fireEvent.click(screen.getByRole('button', { name: /Claims Received/i }));
+    // Switch to Received Claims tab
+    fireEvent.click(screen.getByRole('button', { name: /Received Claims/i }));
     await waitFor(() => {
       expect(screen.getByText(/No claims received yet/i)).toBeDefined();
     });
 
-    // Switch to My Reports tab
-    fireEvent.click(screen.getByRole('button', { name: /My Reports/i }));
+    // Switch to Lost Reports tab
+    fireEvent.click(screen.getByRole('button', { name: /Lost Reports/i }));
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /New report/i })).toBeDefined();
     });
+
+    // Switch to Rewards & Badges tab
+    fireEvent.click(screen.getByRole('button', { name: /Rewards & Badges/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Community Reward Points/i)).toBeDefined();
+      expect(screen.getByText(/Eligibility & Anti-Gaming Integrity Rules/i)).toBeDefined();
+      expect(screen.getAllByText(/Honest Finder/i).length).toBeGreaterThan(0);
+      expect(screen.getByText(/Points Transaction Ledger/i)).toBeDefined();
+    });
   });
 
-  it('navigates to Profile page and displays account identity and preferences', async () => {
+  it('renders Certificate of Appreciation modal when an unlocked milestone badge is clicked', async () => {
+    render(<App />);
+    const claimsNavButtons = screen.getAllByRole('button', { name: /My claims/i });
+    fireEvent.click(claimsNavButtons[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Rewards & Badges/i })).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Rewards & Badges/i }));
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /View Certificate/i }).length).toBeGreaterThan(0);
+    });
+
+    // Click on View Certificate
+    const certButtons = screen.getAllByRole('button', { name: /View Certificate/i });
+    fireEvent.click(certButtons[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Certificate of Appreciation/i })).toBeDefined();
+      expect(screen.getAllByText(/Campus Tester/i).length).toBeGreaterThanOrEqual(2);
+      expect(screen.getByRole('button', { name: /Print \/ Save as PDF/i })).toBeDefined();
+    });
+  });
+
+  it('navigates to Profile page and displays account identity, voluntary phone number, and rewards toggle', async () => {
     render(<App />);
     const userBtn = await screen.findByRole('button', { name: /Campus Tester/i });
     fireEvent.click(userBtn);
@@ -271,6 +354,7 @@ describe('CampusFind Cloud-Synced Platform Integration', () => {
       expect(screen.getByRole('heading', { name: /User Profile & Settings/i })).toBeDefined();
       expect(screen.getAllByText(/tester@campus.edu/i).length).toBeGreaterThan(0);
       expect(screen.getByText(/Notification Preferences/i)).toBeDefined();
+      expect(screen.getByText(/Participate in Campus Honesty Rewards System/i)).toBeDefined();
       expect(screen.getByText(/Account Details/i)).toBeDefined();
     });
   });

@@ -17,6 +17,7 @@ import {
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import type { Claim, ClaimStatus } from '../domain';
 import { notificationService } from './notificationService';
+import { rewardService } from './rewardService';
 
 function docToClaim(d: QueryDocumentSnapshot<DocumentData> | { id: string; data: () => DocumentData }): Claim {
   const data = d.data();
@@ -366,6 +367,15 @@ export const claimService = {
           claimId,
         }).catch((err) => console.warn('Could not send handover_completed notification:', err));
       }
+
+      // Award verified return reward points (50 pts) to finder with duplicate prevention
+      rewardService.awardRewardPoints({
+        userId: confirmedByUserId,
+        action: 'item_returned',
+        targetId: claimId,
+        targetTitle: claimData?.itemTitle || 'Campus Item',
+        description: `Verified safe return of "${claimData?.itemTitle || 'item'}" to owner.`,
+      }).catch((err) => console.warn('Could not award reward points:', err));
 
       return { error: null };
     } catch (err: any) {
