@@ -1,0 +1,339 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        (
+          (request.auth.token.email == 'princeprajapati5607@gmail.com' || request.auth.token.email == 'Princeprajapati5607@gmail.com') &&
+          request.auth.token.email_verified == true
+        ) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // Schema Validation Helpers
+    function isValidItem(data) {
+      return data.keys().hasAll(['type', 'title', 'category', 'description', 'location', 'date', 'status', 'ownerId', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'type', 'title', 'category', 'description', 'color', 'location', 'date', 'time', 'imageUrl', 'image', 'handover', 'status', 'owner', 'ownerId', 'ownerName', 'isDemo', 'demo', 'moderationStatus', 'createdAt', 'updatedAt']) &&
+        data.type in ['lost', 'found'] &&
+        data.title is string && data.title.size() >= 3 && data.title.size() <= 100 &&
+        data.category is string && data.category.size() >= 2 && data.category.size() <= 50 &&
+        data.description is string && data.description.size() >= 5 && data.description.size() <= 2000 &&
+        (!('color' in data) || (data.color is string && data.color.size() <= 50)) &&
+        data.location is string && data.location.size() >= 2 && data.location.size() <= 150 &&
+        data.date is string && data.date.size() <= 10 && data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+        (!('time' in data) || (data.time is string && data.time.size() <= 20)) &&
+        (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 1000000)) &&
+        (!('image' in data) || (data.image is string && data.image.size() <= 1000000)) &&
+        (!('handover' in data) || data.handover is bool) &&
+        data.status in ['Open', 'Possible Match', 'Claim Pending', 'Recovered', 'Closed'] &&
+        data.ownerId is string && data.ownerId.size() <= 128 &&
+        (!('ownerName' in data) || (data.ownerName is string && data.ownerName.size() <= 100)) &&
+        (!('owner' in data) || (data.owner is string && data.owner.size() <= 100)) &&
+        (!('isDemo' in data) || data.isDemo is bool) &&
+        (!('demo' in data) || data.demo is bool) &&
+        (!('moderationStatus' in data) || data.moderationStatus in ['pending', 'approved', 'flagged', 'rejected', 'removed']) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidClaim(data) {
+      return data.keys().hasAll(['itemId', 'claimantId', 'details', 'status', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'itemId', 'itemTitle', 'itemOwnerId', 'claimant', 'claimantId', 'claimantName', 'claimantEmail', 'contactPhone', 'details', 'evidenceUrl', 'status', 'reviewerId', 'reviewerName', 'resolutionNote', 'returnConfirmedAt', 'returnConfirmedBy', 'createdAt', 'updatedAt']) &&
+        data.itemId is string && data.itemId.size() <= 128 &&
+        (!('itemTitle' in data) || (data.itemTitle is string && data.itemTitle.size() <= 150)) &&
+        (!('itemOwnerId' in data) || (data.itemOwnerId is string && data.itemOwnerId.size() <= 128)) &&
+        data.claimantId is string && data.claimantId.size() <= 128 &&
+        data.details is string && data.details.size() >= 10 && data.details.size() <= 1500 &&
+        (!('claimantEmail' in data) || (data.claimantEmail is string && data.claimantEmail.size() <= 150)) &&
+        (!('contactPhone' in data) || (data.contactPhone is string && data.contactPhone.size() <= 50)) &&
+        (!('claimant' in data) || (data.claimant is string && data.claimant.size() <= 100)) &&
+        (!('claimantName' in data) || (data.claimantName is string && data.claimantName.size() <= 100)) &&
+        (!('evidenceUrl' in data) || (data.evidenceUrl is string && data.evidenceUrl.size() <= 1000000)) &&
+        (!('reviewerId' in data) || (data.reviewerId is string && data.reviewerId.size() <= 128)) &&
+        (!('reviewerName' in data) || (data.reviewerName is string && data.reviewerName.size() <= 100)) &&
+        (!('resolutionNote' in data) || (data.resolutionNote is string && data.resolutionNote.size() <= 1000)) &&
+        (!('returnConfirmedBy' in data) || (data.returnConfirmedBy is string && data.returnConfirmedBy.size() <= 128)) &&
+        (!('returnConfirmedAt' in data) || data.returnConfirmedAt is timestamp) &&
+        data.status in ['Pending', 'Under Review', 'Approved', 'Rejected', 'Completed'] &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidReport(data) {
+      return data.keys().hasAll(['itemId', 'reporterId', 'reason', 'status', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'itemId', 'reporterId', 'reporterName', 'reason', 'details', 'status', 'createdAt']) &&
+        data.itemId is string && data.itemId.size() <= 128 &&
+        data.reporterId is string && data.reporterId.size() <= 128 &&
+        data.reason is string && data.reason.size() <= 200 &&
+        (!('reporterName' in data) || (data.reporterName is string && data.reporterName.size() <= 100)) &&
+        (!('details' in data) || (data.details is string && data.details.size() <= 500)) &&
+        data.status in ['pending', 'reviewed', 'dismissed', 'action_taken'] &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['id', 'email', 'displayName', 'role', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'email', 'displayName', 'avatarUrl', 'phoneNumber', 'department', 'preferredContactMethod', 'notificationPreferences', 'rewardsOptIn', 'role', 'createdAt', 'updatedAt']) &&
+        data.id is string && data.id.size() <= 128 &&
+        data.email is string && data.email.size() <= 150 &&
+        data.displayName is string && data.displayName.size() <= 100 &&
+        (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 1000000)) &&
+        (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 50)) &&
+        (!('department' in data) || (data.department is string && data.department.size() <= 150)) &&
+        (!('preferredContactMethod' in data) || data.preferredContactMethod in ['email', 'phone', 'in_person']) &&
+        (!('notificationPreferences' in data) || data.notificationPreferences is map) &&
+        (!('rewardsOptIn' in data) || data.rewardsOptIn is bool) &&
+        data.role in ['student', 'staff', 'moderator', 'admin'] &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidReward(data) {
+      return data.keys().hasAll(['userId', 'action', 'points', 'targetId', 'description', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'userId', 'action', 'points', 'targetId', 'targetTitle', 'description', 'createdAt']) &&
+        data.userId is string && data.userId.size() <= 128 &&
+        data.action in ['item_returned', 'found_item_verified', 'match_assisted'] &&
+        data.points is int && data.points > 0 && data.points <= 500 &&
+        data.targetId is string && data.targetId.size() <= 128 &&
+        (!('targetTitle' in data) || (data.targetTitle is string && data.targetTitle.size() <= 120)) &&
+        data.description is string && data.description.size() <= 300 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['recipientId', 'senderId', 'type', 'title', 'message', 'itemId', 'read', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'recipientId', 'senderId', 'senderName', 'type', 'title', 'message', 'itemId', 'itemTitle', 'foundItemId', 'claimId', 'read', 'createdAt']) &&
+        data.recipientId is string && data.recipientId.size() <= 128 &&
+        data.senderId is string && data.senderId.size() <= 128 &&
+        (!('senderName' in data) || (data.senderName is string && data.senderName.size() <= 100)) &&
+        data.type in ['match_alert', 'claim_submitted', 'claim_approved', 'claim_rejected', 'evidence_requested', 'handover_completed'] &&
+        data.title is string && data.title.size() <= 120 &&
+        data.message is string && data.message.size() <= 1000 &&
+        data.itemId is string && data.itemId.size() <= 128 &&
+        (!('itemTitle' in data) || (data.itemTitle is string && data.itemTitle.size() <= 120)) &&
+        (!('foundItemId' in data) || (data.foundItemId is string && data.foundItemId.size() <= 128)) &&
+        (!('claimId' in data) || (data.claimId is string && data.claimId.size() <= 128)) &&
+        data.read is bool &&
+        data.createdAt is timestamp;
+    }
+
+    // Health-check / ping collection for connection verification
+    match /test/{docId} {
+      allow get: if true;
+    }
+
+    // 1. Items Collection: Campus Lost and Found listings
+    match /items/{itemId} {
+      // Public directory reading: campus members can inspect lost and found listings
+      allow get, list: if true;
+
+      // Create: Authenticated users posting an item for themselves
+      allow create: if isSignedIn()
+        && isValidId(itemId)
+        && isValidItem(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time;
+
+      // Update: Listing owner or administrator
+      allow update: if isSignedIn()
+        && isValidId(itemId)
+        && isValidItem(incoming())
+        && (
+          isAdmin() ||
+          (
+            existing().ownerId == request.auth.uid &&
+            incoming().ownerId == existing().ownerId &&
+            incoming().createdAt == existing().createdAt &&
+            incoming().updatedAt == request.time &&
+            (
+              // Action 1: Status transition (e.g. mark recovered)
+              incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) ||
+              // Action 2: Item content update
+              incoming().diff(existing()).affectedKeys().hasOnly(['title', 'category', 'description', 'color', 'location', 'date', 'time', 'imageUrl', 'image', 'handover', 'status', 'updatedAt'])
+            )
+          )
+        );
+
+      // Delete: Owner or admin
+      allow delete: if isSignedIn()
+        && isValidId(itemId)
+        && (existing().ownerId == request.auth.uid || isAdmin());
+    }
+
+    // 2. Claims Collection: Private verification claims
+    match /claims/{claimId} {
+      // Access to individual claim: claimant, target item owner, or admin
+      allow get: if isSignedIn()
+        && isValidId(claimId)
+        && (
+          resource.data.claimantId == request.auth.uid ||
+          resource.data.itemOwnerId == request.auth.uid ||
+          get(/databases/$(database)/documents/items/$(resource.data.itemId)).data.ownerId == request.auth.uid ||
+          isAdmin()
+        );
+
+      // List claims: claimants list submitted claims, finders list received claims, or admin
+      allow list: if isSignedIn()
+        && (resource.data.claimantId == request.auth.uid || resource.data.itemOwnerId == request.auth.uid || isAdmin());
+
+      // Create: authenticated claimant referencing an existing item
+      allow create: if isSignedIn()
+        && isValidId(claimId)
+        && isValidClaim(incoming())
+        && incoming().claimantId == request.auth.uid
+        && incoming().createdAt == request.time
+        && exists(/databases/$(database)/documents/items/$(incoming().itemId));
+
+      // Update: claim review and resolution
+      allow update: if isSignedIn()
+        && isValidId(claimId)
+        && isValidClaim(incoming())
+        && incoming().claimantId == existing().claimantId
+        && incoming().itemId == existing().itemId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          // Item owner / finder reviewing the claim
+          (
+            (
+              ('itemOwnerId' in existing() && existing().itemOwnerId == request.auth.uid) ||
+              get(/databases/$(database)/documents/items/$(existing().itemId)).data.ownerId == request.auth.uid
+            ) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'resolutionNote', 'reviewerId', 'reviewerName', 'returnConfirmedAt', 'returnConfirmedBy', 'updatedAt'])
+          ) ||
+          // Claimant updating details or withdrawing while still pending
+          (
+            existing().claimantId == request.auth.uid &&
+            existing().status in ['Pending', 'Under Review'] &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['details', 'contactPhone', 'evidenceUrl', 'updatedAt'])
+          )
+        );
+
+      // Delete: claimant when still pending, or admin
+      allow delete: if isSignedIn()
+        && isValidId(claimId)
+        && (isAdmin() || (existing().claimantId == request.auth.uid && existing().status == 'Pending'));
+    }
+
+    // 3. Abuse Reports Collection
+    match /reports/{reportId} {
+      allow get: if isSignedIn()
+        && isValidId(reportId)
+        && (resource.data.reporterId == request.auth.uid || isAdmin());
+
+      allow list: if isSignedIn()
+        && (resource.data.reporterId == request.auth.uid || isAdmin());
+
+      allow create: if isSignedIn()
+        && isValidId(reportId)
+        && isValidReport(incoming())
+        && incoming().reporterId == request.auth.uid
+        && incoming().createdAt == request.time
+        && exists(/databases/$(database)/documents/items/$(incoming().itemId));
+
+      allow update, delete: if isAdmin() && isValidId(reportId);
+    }
+
+    // 4. Users Collection
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+
+      allow create: if isSignedIn()
+        && isValidId(userId)
+        && request.auth.uid == userId
+        && isValidUserProfile(incoming())
+        && incoming().id == userId
+        && incoming().role in ['student', 'staff']
+        && incoming().createdAt == request.time;
+
+      allow update: if isSignedIn()
+        && isValidId(userId)
+        && (
+          isAdmin() ||
+          (
+            request.auth.uid == userId &&
+            isValidUserProfile(incoming()) &&
+            incoming().id == existing().id &&
+            incoming().role == existing().role &&
+            incoming().createdAt == existing().createdAt &&
+            incoming().updatedAt == request.time &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'avatarUrl', 'phoneNumber', 'department', 'preferredContactMethod', 'notificationPreferences', 'rewardsOptIn', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isAdmin() && isValidId(userId);
+    }
+
+    // 5. Notifications Collection: In-app match alerts, claim notices, and return confirmations
+    match /notifications/{notificationId} {
+      allow get: if isSignedIn()
+        && isValidId(notificationId)
+        && (resource.data.recipientId == request.auth.uid || isAdmin());
+
+      allow list: if isSignedIn()
+        && (resource.data.recipientId == request.auth.uid || isAdmin());
+
+      allow create: if isSignedIn()
+        && isValidId(notificationId)
+        && isValidNotification(incoming())
+        && incoming().senderId == request.auth.uid
+        && incoming().read == false
+        && incoming().createdAt == request.time
+        && exists(/databases/$(database)/documents/items/$(incoming().itemId));
+
+      allow update: if isSignedIn()
+        && isValidId(notificationId)
+        && resource.data.recipientId == request.auth.uid
+        && incoming().recipientId == existing().recipientId
+        && incoming().senderId == existing().senderId
+        && incoming().type == existing().type
+        && incoming().title == existing().title
+        && incoming().message == existing().message
+        && incoming().itemId == existing().itemId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['read'])
+        && incoming().read is bool;
+
+      allow delete: if isSignedIn()
+        && isValidId(notificationId)
+        && (resource.data.recipientId == request.auth.uid || isAdmin());
+    }
+
+    // 6. Rewards Collection: Points ledger for verified community actions
+    match /rewards/{rewardId} {
+      allow get, list: if isSignedIn()
+        && (resource.data.userId == request.auth.uid || isAdmin());
+
+      allow create: if isSignedIn()
+        && isValidId(rewardId)
+        && isValidReward(incoming())
+        && incoming().userId == request.auth.uid
+        && incoming().createdAt == request.time;
+
+      allow update, delete: if isAdmin() && isValidId(rewardId);
+    }
+  }
+}

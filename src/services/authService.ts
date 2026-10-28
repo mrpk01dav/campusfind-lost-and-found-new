@@ -10,7 +10,14 @@ import {
   type User as FirebaseUser,
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { auth, db, handleFirestoreError, OperationType } from '../lib/firebase';
+import {
+  auth,
+  db,
+  handleFirestoreError,
+  OperationType,
+  isTokenServiceDisabledError,
+  SECURE_TOKEN_ENABLE_URL,
+} from '../lib/firebase';
 import type { UserProfile, UserRole } from '../domain';
 
 function docDataToProfile(u: FirebaseUser, data?: Record<string, any>): UserProfile {
@@ -184,7 +191,9 @@ export const authService = {
       return { user: profile, error: null };
     } catch (err: any) {
       let msg = err.message || 'Registration failed.';
-      if (err.code === 'auth/operation-not-allowed') {
+      if (isTokenServiceDisabledError(err)) {
+        msg = `Token Service API (securetoken.googleapis.com) is disabled in project. Enable it at: ${SECURE_TOKEN_ENABLE_URL}`;
+      } else if (err.code === 'auth/operation-not-allowed') {
         msg = OPERATION_NOT_ALLOWED_GUIDANCE;
       } else if (err.code === 'auth/email-already-in-use') {
         msg = 'An account with this email already exists. Please sign in instead.';
@@ -208,7 +217,9 @@ export const authService = {
       return { user: docDataToProfile(u), error: null };
     } catch (err: any) {
       let msg = err.message || 'Failed to sign in.';
-      if (err.code === 'auth/operation-not-allowed') {
+      if (isTokenServiceDisabledError(err)) {
+        msg = `Token Service API (securetoken.googleapis.com) is disabled in project. Enable it at: ${SECURE_TOKEN_ENABLE_URL}`;
+      } else if (err.code === 'auth/operation-not-allowed') {
         msg = OPERATION_NOT_ALLOWED_GUIDANCE;
       } else if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
         msg = 'Invalid email or password.';
@@ -230,6 +241,28 @@ export const authService = {
     }
   },
 
+  async clearSession(): Promise<void> {
+    try {
+      await firebaseSignOut(auth);
+    } catch {
+      /* ignore */
+    }
+    if (typeof window !== 'undefined') {
+      try {
+        const toDelete: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && (k.startsWith('firebase:authUser') || k.includes('firebase'))) {
+            toDelete.push(k);
+          }
+        }
+        toDelete.forEach((k) => localStorage.removeItem(k));
+      } catch {
+        /* ignore storage access restrictions */
+      }
+    }
+  },
+
   async resetPassword(email: string): Promise<{ error: string | null }> {
     try {
       await sendPasswordResetEmail(auth, email.trim());
@@ -239,21 +272,24 @@ export const authService = {
     }
   },
 
-  onAuthStateChange(callback: (user: UserProfile | null) => void) {
+  onAuthStateChange(callback: (user: UserProfile | null, tokenNotice?: string | null) => void) {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         try {
           const userRef = doc(db, 'users', firebaseUser.uid);
           const snap = await getDoc(userRef);
           if (snap.exists()) {
-            return callback(docDataToProfile(firebaseUser, snap.data()));
+            return callback(docDataToProfile(firebaseUser, snap.data()), null);
           }
-        } catch {
-          /* fallback below */
+        } catch (docErr) {
+          if (isTokenServiceDisabledError(docErr)) {
+            console.warn('Firebase user has token service disabled notice:', docErr);
+            return callback(docDataToProfile(firebaseUser), SECURE_TOKEN_ENABLE_URL);
+          }
         }
-        callback(docDataToProfile(firebaseUser));
+        callback(docDataToProfile(firebaseUser), null);
       } else {
-        callback(null);
+        callback(null, null);
       }
     });
 

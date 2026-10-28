@@ -11,6 +11,7 @@ import {
   orderBy,
   onSnapshot,
   serverTimestamp,
+  runTransaction,
   type DocumentData,
   type QueryDocumentSnapshot,
 } from 'firebase/firestore';
@@ -103,21 +104,44 @@ export const claimService = {
     evidenceUrl?: string,
   ): Promise<{ claim: Claim | null; error: string | null }> {
     try {
-      // If itemOwnerId wasn't passed, attempt to fetch from target item document
-      let ownerId = itemOwnerId;
-      let title = itemTitle;
-      if (!ownerId || !title) {
-        try {
-          const itemSnap = await getDoc(doc(db, 'items', itemId));
-          if (itemSnap.exists()) {
-            const itemData = itemSnap.data();
-            ownerId = ownerId || itemData.ownerId;
-            title = title || itemData.title;
-          }
-        } catch (e) {
-          console.warn('Could not read parent item for claim enrichment:', e);
-        }
+      // Authoritatively fetch target item document from Firestore
+      const itemSnap = await getDoc(doc(db, 'items', itemId));
+      if (!itemSnap.exists()) {
+        return { claim: null, error: 'Target item could not be found.' };
       }
+      const itemData = itemSnap.data();
+
+      // Guard: No claiming on closed or recovered items
+      if (itemData.status === 'Recovered' || itemData.status === 'Closed') {
+        return { claim: null, error: `This item is already marked as ${itemData.status}. New claims are not accepted.` };
+      }
+
+      // Guard: Prevent finder from submitting a claim on their own item
+      if (itemData.ownerId === claimantId) {
+        return { claim: null, error: 'You cannot submit an ownership claim on an item you reported.' };
+      }
+
+      // Guard: Check for duplicate active claims by the same claimant on this item
+      try {
+        const dupQuery = query(
+          collection(db, 'claims'),
+          where('itemId', '==', itemId),
+          where('claimantId', '==', claimantId),
+        );
+        const dupSnap = await getDocs(dupQuery);
+        const hasActiveClaim = dupSnap.docs.some((d) => {
+          const st = d.data().status;
+          return st === 'Pending' || st === 'Under Review' || st === 'Approved';
+        });
+        if (hasActiveClaim) {
+          return { claim: null, error: 'You already have an active claim submitted for this item. Check your Dashboard.' };
+        }
+      } catch (checkErr) {
+        console.warn('Could not check duplicate claims, proceeding with creation:', checkErr);
+      }
+
+      const ownerId = itemData.ownerId;
+      const title = itemData.title;
 
       const claimRef = doc(collection(db, 'claims'));
       const payload: Record<string, any> = {
@@ -247,27 +271,39 @@ export const claimService = {
   ): Promise<{ error: string | null }> {
     try {
       const claimRef = doc(db, 'claims', claimId);
-      const claimSnap = await getDoc(claimRef);
-      const claimData = claimSnap.exists() ? claimSnap.data() : null;
+      const itemRef = doc(db, 'items', itemId);
+      let claimData: any = null;
 
-      await updateDoc(claimRef, {
-        status: 'Approved',
-        reviewerId,
-        reviewerName,
-        resolutionNote: resolutionNote?.trim() || 'Claim verified and approved by finder.',
-        updatedAt: serverTimestamp(),
-      });
+      await runTransaction(db, async (transaction) => {
+        const claimSnap = await transaction.get(claimRef);
+        if (!claimSnap.exists()) {
+          throw new Error('Claim does not exist.');
+        }
+        claimData = claimSnap.data();
 
-      // Update item status to 'Claim Pending'
-      try {
-        const itemRef = doc(db, 'items', itemId);
-        await updateDoc(itemRef, {
+        const itemSnap = await transaction.get(itemRef);
+        if (!itemSnap.exists()) {
+          throw new Error('Target item does not exist.');
+        }
+        const itemData = itemSnap.data();
+        if (itemData.status === 'Recovered' || itemData.status === 'Closed') {
+          throw new Error('Item is already recovered or closed.');
+        }
+
+        // Atomically update claim and item status together
+        transaction.update(claimRef, {
+          status: 'Approved',
+          reviewerId,
+          reviewerName,
+          resolutionNote: resolutionNote?.trim() || 'Claim verified and approved by finder.',
+          updatedAt: serverTimestamp(),
+        });
+
+        transaction.update(itemRef, {
           status: 'Claim Pending',
           updatedAt: serverTimestamp(),
         });
-      } catch (e) {
-        console.warn('Could not update item status to Claim Pending:', e);
-      }
+      });
 
       if (claimData?.claimantId) {
         notificationService.createNotification({
@@ -337,21 +373,33 @@ export const claimService = {
   ): Promise<{ error: string | null }> {
     try {
       const claimRef = doc(db, 'claims', claimId);
-      const claimSnap = await getDoc(claimRef);
-      const claimData = claimSnap.exists() ? claimSnap.data() : null;
-
-      await updateDoc(claimRef, {
-        status: 'Completed',
-        returnConfirmedAt: serverTimestamp(),
-        returnConfirmedBy: confirmedByUserId,
-        updatedAt: serverTimestamp(),
-      });
-
-      // Transition item to terminal 'Recovered' status
       const itemRef = doc(db, 'items', itemId);
-      await updateDoc(itemRef, {
-        status: 'Recovered',
-        updatedAt: serverTimestamp(),
+      let claimData: any = null;
+
+      await runTransaction(db, async (transaction) => {
+        const claimSnap = await transaction.get(claimRef);
+        if (!claimSnap.exists()) {
+          throw new Error('Claim does not exist.');
+        }
+        claimData = claimSnap.data();
+
+        const itemSnap = await transaction.get(itemRef);
+        if (!itemSnap.exists()) {
+          throw new Error('Target item does not exist.');
+        }
+
+        // Atomically update claim to Completed and item to Recovered
+        transaction.update(claimRef, {
+          status: 'Completed',
+          returnConfirmedAt: serverTimestamp(),
+          returnConfirmedBy: confirmedByUserId,
+          updatedAt: serverTimestamp(),
+        });
+
+        transaction.update(itemRef, {
+          status: 'Recovered',
+          updatedAt: serverTimestamp(),
+        });
       });
 
       if (claimData?.claimantId) {
@@ -416,7 +464,16 @@ export const claimService = {
         onChange(claims);
       },
       (error) => {
-        handleFirestoreError(error, OperationType.GET, 'claims');
+        const rawMsg = error instanceof Error ? error.message : String(error);
+        if (
+          rawMsg.includes('permission') ||
+          rawMsg.includes('PERMISSION_DENIED') ||
+          rawMsg.includes('Missing or insufficient permissions')
+        ) {
+          handleFirestoreError(error, OperationType.GET, 'claims');
+        } else {
+          console.warn('Realtime claims sync notice:', rawMsg);
+        }
       },
     );
 
@@ -439,7 +496,16 @@ export const claimService = {
         onChange(claims);
       },
       (error) => {
-        handleFirestoreError(error, OperationType.GET, 'claims');
+        const rawMsg = error instanceof Error ? error.message : String(error);
+        if (
+          rawMsg.includes('permission') ||
+          rawMsg.includes('PERMISSION_DENIED') ||
+          rawMsg.includes('Missing or insufficient permissions')
+        ) {
+          handleFirestoreError(error, OperationType.GET, 'claims');
+        } else {
+          console.warn('Realtime claims received sync notice:', rawMsg);
+        }
       },
     );
 

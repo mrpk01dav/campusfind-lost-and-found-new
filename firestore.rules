@@ -26,10 +26,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isSignedIn() && (
-        (
-          (request.auth.token.email == 'princeprajapati5607@gmail.com' || request.auth.token.email == 'Princeprajapati5607@gmail.com') &&
-          request.auth.token.email_verified == true
-        ) ||
+        request.auth.token.admin == true ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }
@@ -201,9 +198,13 @@ service cloud.firestore {
       allow create: if isSignedIn()
         && isValidId(claimId)
         && isValidClaim(incoming())
+        && incoming().status == 'Pending'
         && incoming().claimantId == request.auth.uid
         && incoming().createdAt == request.time
-        && exists(/databases/$(database)/documents/items/$(incoming().itemId));
+        && exists(/databases/$(database)/documents/items/$(incoming().itemId))
+        && incoming().itemOwnerId == get(/databases/$(database)/documents/items/$(incoming().itemId)).data.ownerId
+        && get(/databases/$(database)/documents/items/$(incoming().itemId)).data.status in ['Open', 'Possible Match']
+        && incoming().claimantId != get(/databases/$(database)/documents/items/$(incoming().itemId)).data.ownerId;
 
       // Update: claim review and resolution
       allow update: if isSignedIn()
@@ -215,18 +216,24 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           isAdmin() ||
-          // Item owner / finder reviewing the claim
+          // Item owner / finder reviewing the claim with strict state machine transitions
           (
             (
               ('itemOwnerId' in existing() && existing().itemOwnerId == request.auth.uid) ||
               get(/databases/$(database)/documents/items/$(existing().itemId)).data.ownerId == request.auth.uid
             ) &&
+            (
+              (existing().status == 'Pending' && incoming().status in ['Pending', 'Under Review', 'Approved', 'Rejected']) ||
+              (existing().status == 'Under Review' && incoming().status in ['Under Review', 'Approved', 'Rejected']) ||
+              (existing().status == 'Approved' && incoming().status in ['Approved', 'Completed', 'Rejected'])
+            ) &&
             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'resolutionNote', 'reviewerId', 'reviewerName', 'returnConfirmedAt', 'returnConfirmedBy', 'updatedAt'])
           ) ||
-          // Claimant updating details or withdrawing while still pending
+          // Claimant updating details while still pending (claimant CANNOT self-approve or change status)
           (
             existing().claimantId == request.auth.uid &&
             existing().status in ['Pending', 'Under Review'] &&
+            incoming().status == existing().status &&
             incoming().diff(existing()).affectedKeys().hasOnly(['details', 'contactPhone', 'evidenceUrl', 'updatedAt'])
           )
         );
@@ -302,7 +309,12 @@ service cloud.firestore {
         && incoming().senderId == request.auth.uid
         && incoming().read == false
         && incoming().createdAt == request.time
-        && exists(/databases/$(database)/documents/items/$(incoming().itemId));
+        && exists(/databases/$(database)/documents/items/$(incoming().itemId))
+        && incoming().senderId != incoming().recipientId
+        && (
+          incoming().recipientId == get(/databases/$(database)/documents/items/$(incoming().itemId)).data.ownerId ||
+          incoming().senderId == get(/databases/$(database)/documents/items/$(incoming().itemId)).data.ownerId
+        );
 
       allow update: if isSignedIn()
         && isValidId(notificationId)
@@ -334,6 +346,12 @@ service cloud.firestore {
         && incoming().createdAt == request.time;
 
       allow update, delete: if isAdmin() && isValidId(rewardId);
+    }
+
+    // 7. Admins Collection: Trusted administrator directory (clients cannot write)
+    match /admins/{adminId} {
+      allow read: if isSignedIn();
+      allow write: if false;
     }
   }
 }

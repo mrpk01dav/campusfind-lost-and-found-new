@@ -17,8 +17,10 @@ describe('Firestore Security Rules Hardening Audit', () => {
     expect(rules).toContain('id.size() <= 128');
   });
 
-  it('verifies strict email verification against email spoofing attacks', () => {
-    expect(rules).toContain('request.auth.token.email_verified == true');
+  it('verifies trusted admin check using admins collection and custom claims without hardcoded emails', () => {
+    expect(rules).toContain('request.auth.token.admin == true');
+    expect(rules).toContain('exists(/databases/$(database)/documents/admins/$(request.auth.uid))');
+    expect(rules).toContain('match /admins/{adminId}');
   });
 
   it('enforces temporal integrity using serverTimestamp request.time', () => {
@@ -58,5 +60,22 @@ describe('Firestore Security Rules Hardening Audit', () => {
     expect(rules).toContain('match /users/{userId}');
     expect(rules).toContain('request.auth.uid == userId');
     expect(rules).toContain('rewardsOptIn');
+  });
+
+  it('guarantees claims are always created Pending and prevents self-claims and claiming closed items', () => {
+    expect(rules).toContain("incoming().status == 'Pending'");
+    expect(rules).toContain('incoming().itemOwnerId == get(/databases/$(database)/documents/items/$(incoming().itemId)).data.ownerId');
+    expect(rules).toContain("get(/databases/$(database)/documents/items/$(incoming().itemId)).data.status in ['Open', 'Possible Match']");
+    expect(rules).toContain('incoming().claimantId != get(/databases/$(database)/documents/items/$(incoming().itemId)).data.ownerId');
+  });
+
+  it('blocks claimants from self-approving claims or altering status', () => {
+    expect(rules).toContain('incoming().status == existing().status');
+    expect(rules).toContain("existing().status in ['Pending', 'Under Review']");
+  });
+
+  it('enforces legitimate item relationship on notification creation', () => {
+    expect(rules).toContain('incoming().senderId != incoming().recipientId');
+    expect(rules).toContain('incoming().recipientId == get(/databases/$(database)/documents/items/$(incoming().itemId)).data.ownerId');
   });
 });

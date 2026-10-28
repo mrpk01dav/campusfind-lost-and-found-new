@@ -144,4 +144,53 @@ describe('CampusFind domain logic', () => {
     expect(canWithdrawClaim(approvedClaim, 'u1')).toBe(false);
     expect(canWithdrawClaim(completedClaim, 'u1')).toBe(false);
   });
+
+  it('guarantees category match alone does not reach the 35% threshold for a strong match', () => {
+    const itemA: Item = {
+      ...lost,
+      id: 'item-cat-only-1',
+      category: 'Electronics',
+      title: 'Headphones',
+      description: 'Noise canceling over-ear',
+      color: 'Black',
+      location: 'North Campus Quad',
+      date: '2026-10-01',
+    };
+    const itemB: Item = {
+      ...found,
+      id: 'item-cat-only-2',
+      category: 'Electronics',
+      title: 'Calculator',
+      description: 'Scientific calculator with cover',
+      color: 'White',
+      location: 'South Engineering Lab',
+      date: '2026-10-25',
+    };
+    const match = scoreMatch(itemA, itemB);
+    expect(match.score).toBeLessThan(35);
+  });
+
+  it('penalizes chronological contradiction when an item is found before it was lost', () => {
+    const lostItem: Item = {
+      ...lost,
+      id: 'lost-chrono',
+      date: '2026-10-25',
+    };
+    const impossibleFoundItem: Item = {
+      ...found,
+      id: 'found-chrono',
+      date: '2026-10-15', // found 10 days before reported lost!
+    };
+    const result = scoreMatch(lostItem, impossibleFoundItem);
+    expect(result.penalties).toBeDefined();
+    expect(result.penalties).toContain('Chronological contradiction (found before lost)');
+    expect(result.score).toBeLessThan(scoreMatch(lostItem, { ...impossibleFoundItem, date: '2026-10-25' }).score);
+  });
+
+  it('penalizes contradicting campus locations with zero overlap', () => {
+    const item1: Item = { ...lost, location: 'North Athletic Field Gym' };
+    const item2: Item = { ...found, location: 'South Hospital Medical Annex' };
+    const result = scoreMatch(item1, item2);
+    expect(result.penalties).toContain('Different location');
+  });
 });

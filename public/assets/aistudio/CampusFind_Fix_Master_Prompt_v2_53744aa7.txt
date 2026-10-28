@@ -1,0 +1,87 @@
+CAMPUSFIND - FIX, TEST & DEPLOY MASTER PROMPT (v2)
+
+ROLE
+You are a senior full-stack engineer, Firebase security specialist and tester working on my EXISTING CampusFind app (React 19, TypeScript, Vite, Firebase Auth, Cloud Firestore). I am a beginner: give exact steps (file, change, reason, command, success sign, undo, whether it needs a separate deploy).
+
+GOAL
+A secure, reliable, demo-ready app for a college hackathon. Fix real problems in the existing project. Do not rebuild it, do not migrate to Supabase, do not change the visual identity.
+
+STEP 0 - CHECK WHAT YOU CAN DO (answer first, in 5 lines)
+State which of these you can do here: edit files, run npm install/build/tests, run the Firebase Emulator (needs Java + firebase-tools), open a browser, access Git. Mark each YES/NO.
+- If you can edit and run: work in EXECUTE mode.
+- If you cannot: work in PATCH mode. Give complete file contents or exact diffs, and mark every test NOT RUN with exact commands for me to run.
+Never claim a build, test, deploy or live result you did not actually run.
+
+GROUND TRUTH FROM MY EARLIER AUDIT (re-verify each in the current code before acting)
+1. Firebase is the only live backend. src/lib/supabase.ts, supabase/migrations, docs/DATABASE.md, .env.example Supabase keys and the README Supabase text are dead/incorrect. Confirm nothing imports them, then remove them.
+2. Email sign-in shows "auth/operation-not-allowed": the Email/Password provider is disabled in the Firebase Console (console step for me). Also add friendly error messages for this and other auth codes in authService.ts.
+3. Item owners cannot see claims on their own items: claimService only queries by claimantId, and firestore.rules only lets the claimant (or admin) list claims. Fix both the rule and the query, without exposing claims to unrelated users.
+4. tests/firestore.rules.test.ts only checks that the rules TEXT contains strings. Replace it with real Firebase Emulator tests (@firebase/rules-unit-testing, allowed as a dev dependency).
+5. A personal admin email is hardcoded in firestore.rules. Replace with a trusted mechanism (an admins collection that clients cannot write, or custom claims) and remove the email from the repo.
+6. No firebase.json, .firebaserc or firestore.indexes.json exist. Add them so rules and indexes deploy reproducibly. Generate indexes only from queries that actually exist in the code.
+7. Images are stored as base64 JPEG inside Firestore documents. Keep this for the MVP only with a hard size cap (document must stay well under 1 MiB) and clear errors. Do not add Firebase Storage unless I approve (it may require the paid Blaze plan - check and tell me).
+8. The list view loads all items with no limit. Add a sensible limit and ordering.
+9. Unused dependencies (e.g. express, dotenv, @google/genai, @supabase/supabase-js) and two lockfiles (bun.lock and package-lock.json). Verify usage, then keep one package manager and remove unused packages.
+10. The deployed site may be an older build than this repo (I saw "demo/sandbox mode" and no cross-device sync). Add a visible build/version label and Firestore connection status that reflects a real check, not just "config exists".
+11. The seed/cleanup developer tools must be impossible to use in production and must never delete real users' data.
+
+If my repo contains features this list does not mention (rewards, notifications, profiles, certificates, Storage, email preferences), audit them too. If a feature does not exist, skip its phase and say so.
+
+COST RULE
+Stay on the free Spark plan unless I approve otherwise. Anything needing Cloud Functions or Blaze must be listed as "needs approval" with the reason. Do not add features that cannot be made trustworthy without Functions (for example authoritative reward points); defer them and remove any UI that implies they work.
+
+PRIORITY ORDER (hackathon-first)
+P0 demo-critical: sign-in works; report lost/found saves to Firestore; second device sees it; claim submit; owner sees and approves/rejects; claimant sees result; return marked complete.
+P1 safety: claim state machine; ownership derived from the item document; no self-approval; no forged notifications or claims; admin hardening; private claim details not readable by others.
+P2 quality: matching accuracy and explanations, validation, loading/empty/error states, mobile layout, accessibility, dead-code cleanup.
+P3 deferred unless time remains: rewards, certificates, email preferences, moderation dashboard.
+
+WORKING LOOP (for every issue)
+1. Create a backup first: git checkout -b backup-before-fix (or tell me exactly how). Also save a copy of the original firestore.rules as firestore.rules.orig.
+2. Write a one-card summary: issue, evidence (file and line), planned change, side effects, how to test, how to undo.
+3. Make the change. Keep it small.
+4. Run the relevant test/build. If it fails, fix the failure before moving on.
+5. Update STATUS.md in the repo root: issue ID, status (Pending / In Progress / Fixed / Verified / Blocked / NOT RUN), evidence. Mark Verified only after a real passing test.
+6. Never delete or modify production data. Use the Firebase Emulator or clearly labelled test accounts and test records.
+
+CHECKPOINTS
+Do the work in phases. After each phase, STOP and print: what changed, test results, STATUS.md summary, and the exact message I should send to continue ("continue to Phase N"). This keeps your context from filling up.
+
+PHASES
+Phase 0 - Baseline: inspect tree, package.json, lockfiles, Firebase config files, rules, tests, deployment files (identify the real host: AI Studio, Vercel, Firebase Hosting or other, and the production branch). Record install/typecheck/lint/test/build results (or NOT RUN). Do not print secret values. Then continue to Phase 1 without waiting only if the baseline had no blockers.
+
+Phase 1 - Auth and sync (P0):
+- Friendly auth errors; verify profile document creation and recovery if missing; session restore; logout; duplicate listeners.
+- Give me the console steps: enable Email/Password; check Authorized domains include my live domain; confirm the Firestore database ID in firebase-applet-config.json exists; deploy rules and indexes.
+- Add a real connection check and version label.
+- Two-account test (A and B on different devices): A posts item; B sees it without refresh; B claims; A sees claim; A approves; B sees status. Report the first real error if a step fails.
+
+Phase 2 - Claims and rules (P1):
+- Claims always created Pending; owner id and item state read from the actual item document, never trusted from the client.
+- Allowed transitions only (for example Pending -> Approved/Rejected/NeedsInfo -> Completed); only the item owner (or admin) may review; claimant cannot approve; no duplicate active claim by the same user; no claims on closed/recovered items; handle competing claims (only one Approved per item).
+- Use batched writes or transactions so claim and item status never disagree.
+- Owner-side claim listing (rule + query + UI).
+- Admin hardening; role fields not self-editable; notifications (if present) only from valid sender to valid recipient with a real item/claim relationship.
+- Rules are the authority. If something truly cannot be enforced by rules, tell me and propose the smallest safe alternative.
+
+Phase 3 - Emulator security tests (must pass before any deploy):
+claimant cannot approve own claim; claim cannot be created as Approved; stranger cannot edit another user's claim; unrelated user cannot read another user's claim details; non-owner cannot change item status; user cannot make themselves admin; unrelated user cannot send a fake notification (if notifications exist); user cannot write reward points (if rewards exist). Also positive tests: legitimate owner can review, claimant can read own claim.
+
+Phase 4 - Matching and workflow polish (P2): keep matching in domain.ts or a small module; category alone must not equal a strong match; penalise contradicting dates/places; memoise so it is not recomputed every render; deduplicate alerts per item pair; show reasons. Add positive and negative unit tests. Validate required fields; clear loading, empty, success and error states.
+
+Phase 5 - Cleanup and mobile (P2): remove confirmed-dead code and unused dependencies; one lockfile; lint/typecheck added if absent (no major upgrades); accessibility labels, contrast, no horizontal overflow on phones; no fake "verified/official/connected" labels.
+
+Phase 6 - Docs and deployment: rewrite README and docs for Firebase only; document environment/config without secrets; separate commands for hosting, rules, and indexes (for example firebase deploy --only firestore:rules, firebase deploy --only firestore:indexes); explain how my actual host publishes (do not assume GitHub pushes deploy Firebase rules). Keep the current live site until the new build is verified. Restrict the Firebase API key by HTTP referrer in Google Cloud (console step for me).
+
+Phase 7 - Final acceptance and report.
+
+ACCEPTANCE CRITERIA (each must be Pass / Fail / NOT RUN with evidence)
+Build passes; typecheck passes; unit tests pass; emulator security tests pass; email and Google sign-in work; item persists in Firestore; second device sees updates; claim cannot be forged or self-approved; owner can review claims; other users cannot read private claim details; status stays consistent after completion; matching avoids obvious false positives; no critical console errors in tested flows; mobile primary actions work; docs match code; deployment reproducible.
+
+FINAL REPORT
+1 Executive summary. 2 Findings and final status (table). 3 Every file changed and why. 4 Security changes and remaining risks. 5 Auth and sync results. 6 Workflow results. 7 Build/typecheck/lint/test results. 8 NOT RUN items with commands. 9 Firebase Console actions for me. 10 Deployment steps for my real host. 11 Migration/recovery steps. 12 Limitations and deferred items. 13 Verdict: Not ready / Demo-ready with limitations / Pilot-ready / Production-ready, justified only by evidence. 14 Prioritised checklist.
+
+HARD RULES
+Do not fabricate results. Do not expose secrets or personal data. Do not overwrite working code with a simplified replacement. Do not add unnecessary dependencies or frameworks (dev-only test packages are allowed). Do not ask questions you can answer by reading the repo. Ask me only for console actions, billing/plan decisions, or approvals.
+
+START NOW with Step 0, then Phase 0.

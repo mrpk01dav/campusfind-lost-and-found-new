@@ -129,6 +129,7 @@ export default function App() {
   const [authPassword, setAuthPassword] = useState('');
   const [authName, setAuthName] = useState('');
   const [authError, setAuthError] = useState('');
+  const [tokenNoticeUrl, setTokenNoticeUrl] = useState<string | null>(null);
 
   // Claim Modal State
   const [claimTarget, setClaimTarget] = useState<Item | null>(null);
@@ -240,8 +241,11 @@ export default function App() {
     init();
 
     // Listen to real-time auth changes
-    const unsubAuth = authService.onAuthStateChange(async (updatedUser) => {
+    const unsubAuth = authService.onAuthStateChange(async (updatedUser, tokenNotice) => {
       if (isMounted) {
+        if (tokenNotice) {
+          setTokenNoticeUrl(tokenNotice);
+        }
         setUser(updatedUser);
         if (unsubUserClaims) unsubUserClaims();
         if (unsubClaimsReceived) unsubClaimsReceived();
@@ -952,7 +956,15 @@ export default function App() {
     }
   }
 
-  const matchesFor = selected ? findMatches(selected, items) : [];
+  const matchesFor = useMemo(() => (selected ? findMatches(selected, items) : []), [selected, items]);
+  const itemMatchesCountMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const it of items) {
+      map.set(it.id, findMatches(it, items).length);
+    }
+    return map;
+  }, [items]);
+
   const myItems = useMemo(
     () =>
       dedupeById(
@@ -1084,6 +1096,39 @@ export default function App() {
               <RotateCcw size={11} /> Clean Up Test Data
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Google Cloud API Required Banner (Token Service API Notice) */}
+      {tokenNoticeUrl && (
+        <div className="token-api-alert" role="alert">
+          <AlertTriangle size={15} />
+          <div style={{ flex: 1 }}>
+            <b>Google Cloud Action Required:</b> The Token Service API (<code>securetoken.googleapis.com</code>) is disabled or propagating in project <code>37299026377</code>. Firestore operates in safe offline mode.
+            <a
+              href={tokenNoticeUrl}
+              target="_blank"
+              rel="noreferrer"
+              style={{ marginLeft: '8px' }}
+            >
+              Enable in Google Cloud Console →
+            </a>
+          </div>
+          <button
+            className="dev-btn"
+            onClick={async () => {
+              await authService.clearSession();
+              setUser(null);
+              setTokenNoticeUrl(null);
+              setNotice('Session reset. Please sign in or continue in guest mode.');
+            }}
+            title="Reset cached auth tokens"
+          >
+            Reset Session
+          </button>
+          <button onClick={() => setTokenNoticeUrl(null)} aria-label="Dismiss alert">
+            <X size={14} />
+          </button>
         </div>
       )}
 
@@ -1770,7 +1815,7 @@ export default function App() {
               {myLostItems.length ? (
                 <div className="dashboard-list">
                   {myLostItems.map((item) => {
-                    const matchesCount = findMatches(item, items).length;
+                    const matchesCount = itemMatchesCountMap.get(item.id) || 0;
                     const isEditable = canEditReport(item, user?.id);
                     const isCancelable = canCancelReport(item, user?.id);
                     return (
@@ -3375,7 +3420,31 @@ export default function App() {
 
             {authError && (
               <div className="auth-error">
-                {authError.includes('Firebase Console') || authError.includes('Sign-in method') || authError.includes('operation-not-allowed') ? (
+                {authError.includes('securetoken.googleapis.com') || authError.includes('Token Service API') ? (
+                  <div style={{ textAlign: 'left', lineHeight: 1.5 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, marginBottom: '6px', color: '#b94b3e' }}>
+                      <AlertTriangle size={16} />
+                      <span>Google Cloud API Activation Required</span>
+                    </div>
+                    <p style={{ margin: '0 0 8px 0', fontSize: '12px' }}>
+                      Token Service API (<b>securetoken.googleapis.com</b>) must be enabled in your Google Cloud project (<b>37299026377</b>):
+                    </p>
+                    <ol style={{ margin: '0 0 10px 18px', padding: 0, fontSize: '11px', color: '#444' }}>
+                      <li>Click the button below to visit Google Cloud Console</li>
+                      <li>Click <b>Enable API</b></li>
+                      <li>Wait 1–2 minutes for Google's systems to propagate, then retry</li>
+                    </ol>
+                    <a
+                      href="https://console.developers.google.com/apis/api/securetoken.googleapis.com/overview?project=37299026377"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="button primary compact"
+                      style={{ fontSize: '12px', padding: '8px 12px', width: '100%', justifyContent: 'center', textAlign: 'center', textDecoration: 'none', display: 'flex', boxSizing: 'border-box' }}
+                    >
+                      Enable Token Service API in Google Cloud →
+                    </a>
+                  </div>
+                ) : authError.includes('Firebase Console') || authError.includes('Sign-in method') || authError.includes('operation-not-allowed') ? (
                   <div style={{ textAlign: 'left', lineHeight: 1.5 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, marginBottom: '6px', color: '#b94b3e' }}>
                       <AlertTriangle size={16} />

@@ -8,6 +8,7 @@ import {
   deleteDoc,
   query,
   orderBy,
+  limit,
   onSnapshot,
   serverTimestamp,
   type DocumentData,
@@ -50,7 +51,7 @@ function docToItem(d: QueryDocumentSnapshot<DocumentData> | { id: string; data: 
 export const itemService = {
   async fetchItems(): Promise<{ items: Item[]; error: string | null }> {
     try {
-      const q = query(collection(db, 'items'), orderBy('createdAt', 'desc'));
+      const q = query(collection(db, 'items'), orderBy('createdAt', 'desc'), limit(50));
       const snap = await getDocs(q);
       const items = snap.docs.map(docToItem);
       return { items, error: null };
@@ -250,6 +251,9 @@ export const itemService = {
   },
 
   async seedDevData(userId: string, userName: string): Promise<{ inserted: number; error: string | null }> {
+    if (import.meta.env.PROD) {
+      return { inserted: 0, error: 'Dev seeding is disabled in production.' };
+    }
     try {
       const existingSnap = await getDocs(collection(db, 'items'));
       const existingTitles = new Set(existingSnap.docs.map((d) => d.data().title));
@@ -289,6 +293,9 @@ export const itemService = {
   },
 
   async cleanupDevData(): Promise<{ deleted: boolean; error: string | null }> {
+    if (import.meta.env.PROD) {
+      return { deleted: false, error: 'Dev cleanup is disabled in production.' };
+    }
     try {
       const snap = await getDocs(collection(db, 'items'));
       const demoDocs = snap.docs.filter((d) => d.data().isDemo === true);
@@ -309,7 +316,7 @@ export const itemService = {
    * Synchronizes instantly across all connected phones and browser tabs!
    */
   subscribeToItems(onChange: (items: Item[]) => void) {
-    const q = query(collection(db, 'items'), orderBy('createdAt', 'desc'));
+    const q = query(collection(db, 'items'), orderBy('createdAt', 'desc'), limit(50));
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
@@ -317,7 +324,16 @@ export const itemService = {
         onChange(items);
       },
       (error) => {
-        handleFirestoreError(error, OperationType.GET, 'items');
+        const rawMsg = error instanceof Error ? error.message : String(error);
+        if (
+          rawMsg.includes('permission') ||
+          rawMsg.includes('PERMISSION_DENIED') ||
+          rawMsg.includes('Missing or insufficient permissions')
+        ) {
+          handleFirestoreError(error, OperationType.GET, 'items');
+        } else {
+          console.warn('Realtime items sync notice:', rawMsg);
+        }
       },
     );
 

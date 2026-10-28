@@ -46,9 +46,23 @@ export interface FirestoreErrorInfo {
   };
 }
 
+export function isTokenServiceDisabledError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  return msg.includes('token-service-api-has-not-been-used') || msg.includes('securetoken.googleapis.com');
+}
+
+export const SECURE_TOKEN_ENABLE_URL =
+  `https://console.developers.google.com/apis/api/securetoken.googleapis.com/overview?project=${firebaseConfig.messagingSenderId || firebaseConfig.projectId}`;
+
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
+  const rawMsg = error instanceof Error ? error.message : String(error);
+  const isPermission =
+    rawMsg.includes('permission') ||
+    rawMsg.includes('PERMISSION_DENIED') ||
+    rawMsg.includes('Missing or insufficient permissions');
+
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: rawMsg,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -64,28 +78,41 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path,
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
+
+  if (isPermission) {
+    console.error('Firestore Security Rule Violation: ', JSON.stringify(errInfo));
+    throw new Error(JSON.stringify(errInfo));
+  }
+
+  if (isTokenServiceDisabledError(error)) {
+    console.warn(
+      `Firestore Auth Token Notice: Token Service API (securetoken.googleapis.com) is disabled or propagating in project ${firebaseConfig.messagingSenderId || firebaseConfig.projectId}. Enable at ${SECURE_TOKEN_ENABLE_URL}`,
+    );
+  } else {
+    console.warn(`Firestore Operation Warning (${operationType} at ${path}):`, rawMsg);
+  }
+
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Connection test to Firestore
-export async function testConnection(): Promise<boolean> {
+// Diagnostic connection test to Firestore (called on-demand, not on eager boot)
+export async function testConnection(): Promise<{ connected: boolean; tokenServiceDisabled: boolean; message: string }> {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
-    return true;
+    return { connected: true, tokenServiceDisabled: false, message: 'Cloud Firestore connected directly.' };
   } catch (error) {
-    if (error instanceof Error) {
-      if (error.message.includes('the client is offline')) {
-        console.warn('Firebase connection: Client is currently offline or connecting to Cloud Firestore.');
-      } else if (error.message.includes('token-service-api-has-not-been-used')) {
-        console.warn('Firebase Auth Token Service initializing. If sign-in persists in offline mode, ensure securetoken.googleapis.com is enabled in Google Cloud Console.');
-      }
+    if (isTokenServiceDisabledError(error)) {
+      return {
+        connected: false,
+        tokenServiceDisabled: true,
+        message: `Token Service API not yet enabled on project. Visit: ${SECURE_TOKEN_ENABLE_URL}`,
+      };
     }
-    return false;
+    const isOffline = error instanceof Error && error.message.includes('the client is offline');
+    return {
+      connected: false,
+      tokenServiceDisabled: false,
+      message: isOffline ? 'Operating in offline cache mode.' : (error instanceof Error ? error.message : String(error)),
+    };
   }
 }
-
-// Boot connection check
-testConnection().catch((err) => {
-  console.warn('Firebase test connection status:', err);
-});

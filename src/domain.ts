@@ -338,24 +338,68 @@ const similarity = (a: string, b: string) => {
 export function scoreMatch(lost: Item, found: Item) {
   if (lost.type !== 'lost' || found.type !== 'found') return { score: 0, reasons: [] as string[] };
   const parts: [string, number, number][] = [];
-  if (lost.category && found.category)
-    parts.push(['Category', lost.category.toLowerCase() === found.category.toLowerCase() ? 1 : 0, 30]);
-  if (lost.color && found.color) parts.push(['Color', similarity(lost.color, found.color), 25]);
-  if (lost.location && found.location) parts.push(['Location', similarity(lost.location, found.location), 20]);
-  if (lost.date && found.date) {
-    const days = Math.abs(Date.parse(lost.date + 'T12:00:00Z') - Date.parse(found.date + 'T12:00:00Z')) / 86400000;
-    parts.push(['Date proximity', Math.max(0, 1 - days / 15), 15]);
+  let penalty = 0;
+  const penaltyReasons: string[] = [];
+
+  // 1. Category: weight 25 (Category alone cannot meet the 35% threshold for a strong match)
+  if (lost.category && found.category) {
+    const catMatch = lost.category.toLowerCase() === found.category.toLowerCase() ? 1 : 0;
+    parts.push(['Category', catMatch, 25]);
+    if (!catMatch) {
+      penalty += 15;
+    }
   }
+
+  // 2. Color: weight 25
+  if (lost.color && found.color) {
+    parts.push(['Color', similarity(lost.color, found.color), 25]);
+  }
+
+  // 3. Campus Location: weight 25
+  if (lost.location && found.location) {
+    const locSim = similarity(lost.location, found.location);
+    parts.push(['Location', locSim, 25]);
+    // Contradicting locations with zero token overlap
+    if (locSim === 0 && lost.location.trim().length >= 3 && found.location.trim().length >= 3) {
+      penalty += 15;
+      penaltyReasons.push('Different location');
+    }
+  }
+
+  // 4. Date Proximity: weight 15
+  if (lost.date && found.date) {
+    const lostMs = Date.parse(lost.date + 'T12:00:00Z');
+    const foundMs = Date.parse(found.date + 'T12:00:00Z');
+    const dayDiff = (foundMs - lostMs) / 86400000;
+
+    // Chronological impossibility: item was supposedly found BEFORE it was lost
+    if (dayDiff < -1) {
+      penalty += 35;
+      penaltyReasons.push('Chronological contradiction (found before lost)');
+    } else {
+      const absDays = Math.abs(dayDiff);
+      parts.push(['Date proximity', Math.max(0, 1 - absDays / 15), 15]);
+      if (absDays > 30) {
+        penalty += 15;
+      }
+    }
+  }
+
+  // 5. Description & Title keywords: weight 10
   const text = similarity(lost.title + ' ' + lost.description, found.title + ' ' + found.description);
   parts.push(['Description', text, 10]);
+
   const totalWeight = parts.reduce((s, p) => s + p[2], 0);
-  const score = totalWeight ? Math.round((parts.reduce((s, p) => s + p[1] * p[2], 0) / totalWeight) * 100) : 0;
+  const baseScore = totalWeight ? Math.round((parts.reduce((s, p) => s + p[1] * p[2], 0) / totalWeight) * 100) : 0;
+  const score = Math.max(0, Math.min(100, baseScore - penalty));
+
   return {
     score,
     reasons: parts
       .filter((p) => p[1] >= 0.35)
       .sort((a, b) => b[1] * b[2] - a[1] * a[2])
       .map((p) => p[0]),
+    penalties: penaltyReasons,
   };
 }
 
